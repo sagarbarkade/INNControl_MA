@@ -113,6 +113,12 @@ def _month_sort_key(x):
 
 # Main Processing Function (full business logic from your Test.py)
 def process_far_file(uploaded_file):
+    st.write(f"Uploaded file size: {getattr(uploaded_file, 'size', 'unknown')} bytes")
+    file_bytes = io.BytesIO(uploaded_file.read())
+    file_size = file_bytes.getbuffer().nbytes
+    st.write(f"BytesIO file size: {file_size} bytes")
+    file_bytes.seek(0)
+    excel_file = file_bytes
     # Convert uploaded file to BytesIO for pandas/openpyxl
     file_bytes = io.BytesIO(uploaded_file.read())
     file_bytes.seek(0)
@@ -180,6 +186,7 @@ def process_far_file(uploaded_file):
         output = io.BytesIO()
         wb.save(output)
         output.seek(0)
+        st.write(f"Debug: Output BytesIO size: {output.getbuffer().nbytes} bytes")
         st.write("Debug: Returning output BytesIO")
         return output
     except Exception as e:
