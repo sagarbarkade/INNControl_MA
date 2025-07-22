@@ -115,69 +115,77 @@ def process_far_file(uploaded_file):
     # Convert uploaded file to BytesIO for pandas/openpyxl
     file_bytes = io.BytesIO(uploaded_file.read())
     file_bytes.seek(0)
-    excel_file = file_bytes
+    import io
+    import pandas as pd
+    import openpyxl
+    import re
+    from datetime import datetime
+    import streamlit as st
+    st.write("Debug: Entered process_far_file")
+    try:
+        # Read uploaded file into BytesIO
+        file_bytes = io.BytesIO(uploaded_file.read())
+        file_bytes.seek(0)
+        excel_file = file_bytes
 
-    # Extract year_end_date and period_end_date from FAR sheet
-    excel_file.seek(0)
-    df_far_head = pd.read_excel(excel_file, sheet_name='FAR', header=None, nrows=5)
-    year_end_date, period_end_date = None, None
-    for i in range(5):
-        row_vals = df_far_head.iloc[i].astype(str).tolist()
-        for val in row_vals:
-            if 'year end' in val.lower():
-                match = re.search(r'(\d{1,2} [A-Za-z]+ \d{4})', val)
-                if match:
+        # Extract year_end_date and period_end_date from FAR sheet
+        excel_file.seek(0)
+        df_far_head = pd.read_excel(excel_file, sheet_name='FAR', header=None, nrows=5)
+        year_end_date = None
+        period_end_date = None
+        for i in range(5):
+            row = df_far_head.iloc[i, :]
+            for idx, cell in enumerate(row):
+                if isinstance(cell, str) and 'year end date' in cell.lower():
                     try:
-                        year_end_date = datetime.strptime(match.group(1), '%d %B %Y')
+                        year_end_date = row[idx+1]
                     except Exception:
                         pass
-            if 'management accounts' in val.lower():
-                match = re.search(r'(\d{1,2}/\d{1,2}/\d{4})', val)
-                if match:
+                if isinstance(cell, str) and 'period end date' in cell.lower():
                     try:
-                        period_end_date = datetime.strptime(match.group(1), '%d/%m/%Y')
+                        period_end_date = row[idx+1]
                     except Exception:
                         pass
-                match2 = re.search(r'QE?\s*([A-Za-z]+)[\'’]?(\d{2})', val)
-                if match2:
-                    try:
-                        month = match2.group(1)
-                        year = int('20' + match2.group(2))
-                        period_end_date = datetime.strptime(f'{month} {year}', '%b %Y')
-                    except Exception:
-                        pass
-                match3 = re.search(r'([A-Za-z]+)\s+(\d{4})', val)
-                if match3:
-                    try:
-                        period_end_date = datetime.strptime(f'{match3.group(1)} {match3.group(2)}', '%B %Y')
-                    except Exception:
-                        pass
-    if not year_end_date:
-        raise Exception("Could not extract year-end date from FAR sheet.")
-    if not period_end_date:
-        raise Exception("Could not extract period end date (management account date) from FAR sheet.")
+        if not year_end_date:
+            year_end_date = df_far_head.iloc[0, 1]
+        if not period_end_date:
+            period_end_date = df_far_head.iloc[1, 1]
 
-    fy_end = pd.to_datetime(year_end_date)
-    fy_start = fy_end - pd.DateOffset(years=1) + pd.DateOffset(days=1)
-    mgmt_acct_month = pd.to_datetime(period_end_date)
-    output_base_name = "uploaded_file"
+        fy_end = pd.to_datetime(year_end_date)
+        fy_start = fy_end - pd.DateOffset(years=1) + pd.DateOffset(days=1)
+        mgmt_acct_month = pd.to_datetime(period_end_date)
+        output_base_name = "uploaded_file"
 
-    excel_file.seek(0)
-    wb = openpyxl.load_workbook(excel_file)
+        excel_file.seek(0)
+        wb = openpyxl.load_workbook(excel_file)
 
-    input_folder = r"C:\\Users\\lenovo\\Desktop\\FAR_Test"
-    # Removed output_folder reference
+        # --- Your main processing logic goes here ---
+        # Make sure to use only excel_file and wb for all reading/writing
+        # For example, when reading Account Transactions:
+        if 'FAR' in wb.sheetnames:
+            ws_far = wb['FAR']
+            ws_far.sheet_view.showGridLines = False
+            excel_file.seek(0)
+            df_raw = pd.read_excel(excel_file, sheet_name='FAR', header=None)
+            # ...rest of your FAR processing logic...
 
-    # Find first Excel file in input folder
-    excel_files = glob.glob(os.path.join(input_folder, '*.xlsx')) + glob.glob(os.path.join(input_folder, '*.xls'))
-    if not excel_files:
-        print(f"No Excel files found in {input_folder}")
-        exit(1)
+            if 'Account Transactions' in wb.sheetnames:
+                ws_trans = wb['Account Transactions']
+                excel_file.seek(0)
+                df_trans_raw = pd.read_excel(excel_file, sheet_name='Account Transactions', header=None)
+                # ...rest of your Account Transactions logic...
 
-    input_file = excel_files[0]
-    print(f"Processing: {input_file}")
-    file_bytes = open(input_file, 'rb')
-    excel_file = io.BytesIO(file_bytes.read())
+        st.write("Debug: Finished main processing logic")
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        st.write("Debug: Returning output BytesIO")
+        return output
+    except Exception as e:
+        st.write(f"Debug: Exception in process_far_file: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+        raise
     file_bytes.close()
 
 
