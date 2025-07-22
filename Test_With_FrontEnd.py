@@ -1290,103 +1290,37 @@ def process_far_file(uploaded_file):
             if not df_trans.empty and 'Asset Type' in df_trans.columns:
                 matching_rows = df_trans[df_trans['Asset Type'] == table_name].reset_index(drop=True)
                 if not matching_rows.empty:
+                    # Build new_rows with all columns from updated_table
                     new_rows = pd.DataFrame()
-                    new_rows['Purchase Date'] = matching_rows['Purchase Date']
-                    new_rows['Details'] = matching_rows['Details']
-                    new_rows['Cost'] = matching_rows['Cost']
-                    new_rows['Addition'] = 0
-                    new_rows['Total Cost'] = 0
-                    new_rows['Depreciation Rate'] = far_table_deprates.get(table_name.strip(), 0)
-                    new_rows['Accumulated Depreciation'] = 0
-                    for m in months:
-                        new_rows[m] = 0
+                    for col in updated_table.columns:
+                        if col in matching_rows.columns:
+                            new_rows[col] = matching_rows[col]
+                        else:
+                            new_rows[col] = 0
+                    # Remove any 'opening balance' or 'closing balance' rows
                     if 'Details' in new_rows.columns:
                         new_rows = new_rows[~new_rows['Details'].astype(str).str.strip().str.lower().isin(['opening balance','closing balance'])]
-                    if not updated_table.empty:
-                        merge_cols = ['Purchase Date', 'Details', 'Cost']
-                        def safe_str(x):
-                            if pd.isnull(x):
-                                return ''
-                            if isinstance(x, pd.Timestamp) or isinstance(x, datetime):
-                                return x.strftime('%Y-%m-%d')
-                            try:
-                                dt = pd.to_datetime(x, errors='coerce')
-                                if pd.notnull(dt):
-                                    return dt.strftime('%Y-%m-%d')
-                            except Exception:
-                                pass
-                            return str(x)
-                        updated_table_key = updated_table[merge_cols].applymap(safe_str).agg('|'.join, axis=1)
-                        new_rows_key = new_rows[merge_cols].applymap(safe_str).agg('|'.join, axis=1)
-                        new_rows = new_rows[~new_rows_key.isin(updated_table_key)]
-                    for idx, row in new_rows.iterrows():
+                    # Only add rows that are not already present
+                    merge_cols = ['Purchase Date', 'Details', 'Cost']
+                    def safe_str(x):
+                        if pd.isnull(x):
+                            return ''
+                        if isinstance(x, pd.Timestamp) or isinstance(x, datetime):
+                            return x.strftime('%Y-%m-%d')
                         try:
-                            pdate = pd.to_datetime(row['Purchase Date'], errors='coerce')
+                            dt = pd.to_datetime(x, errors='coerce')
+                            if pd.notnull(dt):
+                                return dt.strftime('%Y-%m-%d')
                         except Exception:
-                            pdate = None
-                        purchase_amt = pd.to_numeric(row['Cost'], errors='coerce') if pd.notnull(row['Cost']) else 0
-                        if pd.notnull(pdate) and fy_start <= pdate <= fy_end:
-                            new_rows.at[idx, 'Addition'] = purchase_amt
-                            new_rows.at[idx, 'Cost'] = 0
-                        else:
-                            new_rows.at[idx, 'Addition'] = 0
-                            new_rows.at[idx, 'Cost'] = purchase_amt
-                    new_rows['Total Cost'] = pd.to_numeric(new_rows['Cost'], errors='coerce').fillna(0) + pd.to_numeric(new_rows['Addition'], errors='coerce').fillna(0)
-                    for idx, row in new_rows.iterrows():
-                        try:
-                            pdate = pd.to_datetime(row['Purchase Date'], errors='coerce')
-                        except Exception:
-                            pdate = None
-                        total_cost = pd.to_numeric(row['Total Cost'], errors='coerce')
-                        dep_rate = pd.to_numeric(row['Depreciation Rate'], errors='coerce')
-                        last_fy_month = fy_start - pd.DateOffset(months=1)
-                        months_in_use = 0
-                        if pd.notnull(pdate) and pdate <= last_fy_month:
-                            months_in_use = (last_fy_month.year - pdate.year) * 12 + (last_fy_month.month - pdate.month) + 1
-                            if months_in_use < 0:
-                                months_in_use = 0
-                        monthly_dep = (total_cost * dep_rate / 100) / 12 if total_cost and dep_rate else 0
-                        acc_dep = monthly_dep * months_in_use
-                        new_rows.at[idx, 'Accumulated Depreciation'] = acc_dep
-                    for idx, row in new_rows.iterrows():
-                        try:
-                            pdate = pd.to_datetime(row['Purchase Date'], errors='coerce')
-                        except Exception:
-                            pdate = None
-                        total_cost = pd.to_numeric(row['Total Cost'], errors='coerce')
-                        dep_rate = pd.to_numeric(row['Depreciation Rate'], errors='coerce')
-                        monthly_dep = (total_cost * dep_rate / 100) / 12 if total_cost and dep_rate else 0
-                        for m in months:
-                            try:
-                                m_str = m.replace('Dep', '').strip()
-                                m_dt = pd.to_datetime(m_str, format='%b-%y')
-                            except Exception:
-                                m_dt = None
-                            if pd.notnull(pdate) and pd.notnull(m_dt):
-                                if (pdate <= m_dt + pd.offsets.MonthEnd(0)) and (m_dt <= mgmt_acct_month):
-                                    new_rows.at[idx, m] = monthly_dep
-                                elif m_dt > mgmt_acct_month:
-                                    new_rows.at[idx, m] = ''
-                                else:
-                                    new_rows.at[idx, m] = 0
-                            else:
-                                new_rows.at[idx, m] = ''
-                    dep_month_cols = months
-                    acc_dep_col_name = 'Accumulated Depreciation'
-                    total_cost_col_name = 'Total Cost'
-                    new_rows['Total Depreciation'] = pd.to_numeric(new_rows[acc_dep_col_name], errors='coerce').fillna(0) + new_rows[dep_month_cols].apply(pd.to_numeric, errors='coerce').fillna(0).sum(axis=1)
-                    new_rows['WDV'] = pd.to_numeric(new_rows[total_cost_col_name], errors='coerce').fillna(0) - new_rows['Total Depreciation']
-                    if 'Total Depreciation' not in updated_table.columns:
-                        updated_table['Total Depreciation'] = 0
-                    if 'WDV' not in updated_table.columns:
-                        updated_table['WDV'] = 0
-                    full_cols = static_headers + months + ['Total Depreciation', 'WDV']
-                    updated_table = updated_table.reindex(columns=full_cols, fill_value=0)
-                    new_rows = new_rows.reindex(columns=full_cols, fill_value=0)
+                            pass
+                        return str(x)
+                    updated_table_key = updated_table[merge_cols].applymap(safe_str).agg('|'.join, axis=1)
+                    new_rows_key = new_rows[merge_cols].applymap(safe_str).agg('|'.join, axis=1)
+                    new_rows = new_rows[~new_rows_key.isin(updated_table_key)]
+                    # Append new rows
                     if not new_rows.empty:
                         print(f"Appending {len(new_rows)} new transaction row(s) to table '{table_name}'")
-                    combined_table = pd.concat([updated_table, new_rows], ignore_index=True)
-                    updated_table = combined_table
+                        updated_table = pd.concat([updated_table, new_rows], ignore_index=True)
             dep_rate_val = far_table_deprates.get(table_name.strip(), 0)
             for col in ['Addition', 'Total Cost', 'Depreciation Rate', 'Accumulated Depreciation'] + months:
                 if col not in updated_table.columns:
