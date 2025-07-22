@@ -114,11 +114,10 @@ def _month_sort_key(x):
 # Main Processing Function (full business logic from your Test.py)
 def process_far_file(uploaded_file):
     st.write(f"Uploaded file size: {getattr(uploaded_file, 'size', 'unknown')} bytes")
-    file_bytes = io.BytesIO(uploaded_file.read())
-    file_size = file_bytes.getbuffer().nbytes
-    st.write(f"BytesIO file size: {file_size} bytes")
-    file_bytes.seek(0)
-    excel_file = file_bytes
+    file_bytes = uploaded_file.read()
+    st.write(f"Raw file_bytes length: {len(file_bytes)}")
+    excel_file = io.BytesIO(file_bytes)
+    excel_file.seek(0)
     # Convert uploaded file to BytesIO for pandas/openpyxl
     file_bytes = io.BytesIO(uploaded_file.read())
     file_bytes.seek(0)
@@ -137,7 +136,14 @@ def process_far_file(uploaded_file):
 
         # Extract year_end_date and period_end_date from FAR sheet
         excel_file.seek(0)
-        df_far_head = pd.read_excel(excel_file, sheet_name='FAR', header=None, nrows=5, engine='openpyxl')
+        try:
+            df_far_head = pd.read_excel(excel_file, sheet_name='FAR', header=None, nrows=5, engine='openpyxl')
+            st.write("Read Excel file successfully")
+        except Exception as e:
+            st.error(f"Failed to read Excel file: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+            raise
         year_end_date = None
         period_end_date = None
         for i in range(5):
