@@ -165,7 +165,9 @@ def process_far_file(uploaded_file):
     excel_file.seek(0)
     wb = openpyxl.load_workbook(excel_file)
 
-    
+    input_folder = r"C:\\Users\\lenovo\\Desktop\\FAR_Test"
+    # Removed output_folder reference
+
     # Find first Excel file in input folder
     excel_files = glob.glob(os.path.join(input_folder, '*.xlsx')) + glob.glob(os.path.join(input_folder, '*.xls'))
     if not excel_files:
@@ -1804,9 +1806,7 @@ def process_far_file(uploaded_file):
     # 4. Save the modified workbook to output folder
     safe_name = re.sub(r'[^A-Za-z0-9._-]', '_', str(output_base_name))
     far_output_name = f'{safe_name}.xlsx'
-    output_path = os.path.join(output_folder, far_output_name)
-    wb.save(output_path)
-    print(f"Done! Output saved to: {output_path}")
+    # Removed output_path and local save, only use BytesIO for output
 
 
     
