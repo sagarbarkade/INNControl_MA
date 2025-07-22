@@ -165,9 +165,7 @@ def process_far_file(uploaded_file):
     excel_file.seek(0)
     wb = openpyxl.load_workbook(excel_file)
 
-    input_folder = r"C:\\Users\\lenovo\\Desktop\\FAR_Test"
-    output_folder = r"C:\\Users\\lenovo\\Desktop\\Output"
-
+    
     # Find first Excel file in input folder
     excel_files = glob.glob(os.path.join(input_folder, '*.xlsx')) + glob.glob(os.path.join(input_folder, '*.xls'))
     if not excel_files:
