@@ -2,7 +2,6 @@ import streamlit as st
 import io
 import pandas as pd
 import openpyxl
-
 from datetime import datetime
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 import re
@@ -113,100 +112,67 @@ def _month_sort_key(x):
 
 # Main Processing Function (full business logic from your Test.py)
 def process_far_file(uploaded_file):
-    st.write(f"Uploaded file size: {getattr(uploaded_file, 'size', 'unknown')} bytes")
-    file_bytes = uploaded_file.read()
-    st.write(f"Raw file_bytes length: {len(file_bytes)}")
-    excel_file = io.BytesIO(file_bytes)
-    excel_file.seek(0)
     # Convert uploaded file to BytesIO for pandas/openpyxl
     file_bytes = io.BytesIO(uploaded_file.read())
     file_bytes.seek(0)
-    # removed duplicate import io
-    import pandas as pd
-    import openpyxl
-    import re
-    from datetime import datetime
+    excel_file = file_bytes
 
-    st.write("Debug: Entered process_far_file")
-    try:
-        # Read uploaded file into BytesIO
-        file_bytes = io.BytesIO(uploaded_file.read())
-        file_bytes.seek(0)
-        excel_file = file_bytes
-
-        # Extract year_end_date and period_end_date from FAR sheet
-        excel_file.seek(0)
-        try:
-            df_far_head = pd.read_excel(excel_file, sheet_name='FAR', header=None, nrows=5, engine='openpyxl')
-            st.write("Read Excel file successfully")
-        except Exception as e:
-            st.error(f"Failed to read Excel file: {e}")
-            import traceback
-            st.code(traceback.format_exc())
-            raise
-        year_end_date = None
-        period_end_date = None
-        for i in range(5):
-            row = df_far_head.iloc[i, :]
-            for idx, cell in enumerate(row):
-                if isinstance(cell, str) and 'year end date' in cell.lower():
+    # Extract year_end_date and period_end_date from FAR sheet
+    excel_file.seek(0)
+    df_far_head = pd.read_excel(excel_file, sheet_name='FAR', header=None, nrows=5)
+    year_end_date, period_end_date = None, None
+    for i in range(5):
+        row_vals = df_far_head.iloc[i].astype(str).tolist()
+        for val in row_vals:
+            if 'year end' in val.lower():
+                match = re.search(r'(\d{1,2} [A-Za-z]+ \d{4})', val)
+                if match:
                     try:
-                        year_end_date = row[idx+1]
+                        year_end_date = datetime.strptime(match.group(1), '%d %B %Y')
                     except Exception:
                         pass
-                if isinstance(cell, str) and 'period end date' in cell.lower():
+            if 'management accounts' in val.lower():
+                match = re.search(r'(\d{1,2}/\d{1,2}/\d{4})', val)
+                if match:
                     try:
-                        period_end_date = row[idx+1]
+                        period_end_date = datetime.strptime(match.group(1), '%d/%m/%Y')
                     except Exception:
                         pass
-        if not year_end_date:
-            year_end_date = df_far_head.iloc[0, 1]
-        if not period_end_date:
-            period_end_date = df_far_head.iloc[1, 1]
+                match2 = re.search(r'QE?\s*([A-Za-z]+)[\'’]?(\d{2})', val)
+                if match2:
+                    try:
+                        month = match2.group(1)
+                        year = int('20' + match2.group(2))
+                        period_end_date = datetime.strptime(f'{month} {year}', '%b %Y')
+                    except Exception:
+                        pass
+                match3 = re.search(r'([A-Za-z]+)\s+(\d{4})', val)
+                if match3:
+                    try:
+                        period_end_date = datetime.strptime(f'{match3.group(1)} {match3.group(2)}', '%B %Y')
+                    except Exception:
+                        pass
+    if not year_end_date:
+        raise Exception("Could not extract year-end date from FAR sheet.")
+    if not period_end_date:
+        raise Exception("Could not extract period end date (management account date) from FAR sheet.")
 
-        fy_end = pd.to_datetime(year_end_date)
-        fy_start = fy_end - pd.DateOffset(years=1) + pd.DateOffset(days=1)
-        mgmt_acct_month = pd.to_datetime(period_end_date)
-        output_base_name = "uploaded_file"
+    fy_end = pd.to_datetime(year_end_date)
+    fy_start = fy_end - pd.DateOffset(years=1) + pd.DateOffset(days=1)
+    mgmt_acct_month = pd.to_datetime(period_end_date)
+    output_base_name = "uploaded_file"
 
-        excel_file.seek(0)
-        wb = openpyxl.load_workbook(excel_file)
+    excel_file.seek(0)
+    wb = openpyxl.load_workbook(excel_file)
 
-        # --- Your main processing logic goes here ---
-        # Make sure to use only excel_file and wb for all reading/writing
-        # For example, when reading Account Transactions:
-        if 'FAR' in wb.sheetnames:
-            ws_far = wb['FAR']
-            ws_far.sheet_view.showGridLines = False
-            excel_file.seek(0)
-            df_raw = pd.read_excel(excel_file, sheet_name='FAR', header=None, engine='openpyxl')
-            # ...rest of your FAR processing logic...
-
-            if 'Account Transactions' in wb.sheetnames:
-                ws_trans = wb['Account Transactions']
-                excel_file.seek(0)
-                df_trans_raw = pd.read_excel(excel_file, sheet_name='Account Transactions', header=None, engine='openpyxl')
-                # ...rest of your Account Transactions logic...
-
-        st.write("Debug: Finished main processing logic")
-        output = io.BytesIO()
-        wb.save(output)
-        output.seek(0)
-        st.write(f"Debug: Output BytesIO size: {output.getbuffer().nbytes} bytes")
-        st.write("Debug: Returning output BytesIO")
-        return output
-    except Exception as e:
-        st.write(f"Debug: Exception in process_far_file: {e}")
-        import traceback
-        st.code(traceback.format_exc())
-        raise
-    file_bytes.close()
+    # Removed all local folder/file references. Only use uploaded_file and in-memory BytesIO for Streamlit deployment.
+    # All file reading/writing should be done in-memory for Streamlit deployment.
 
 
     # --- Place your main processing logic here, adapted from your Streamlit code ---
     # 1. Extract year_end_date and period_end_date from FAR sheet
     excel_file.seek(0)
-    df_far_head = pd.read_excel(excel_file, sheet_name='FAR', header=None, nrows=5, engine='openpyxl')
+    df_far_head = pd.read_excel(excel_file, sheet_name='FAR', header=None, nrows=5)
     year_end_date = None
     period_end_date = None
     for i in range(5):
@@ -251,7 +217,8 @@ def process_far_file(uploaded_file):
     fy_end = pd.to_datetime(year_end_date)
     fy_start = fy_end - pd.DateOffset(years=1) + pd.DateOffset(days=1)
     mgmt_acct_month = pd.to_datetime(period_end_date)
-    output_base_name = os.path.splitext(os.path.basename(input_file))[0]
+    # output_base_name can be a static string or derived from uploaded_file.name if needed
+    output_base_name = 'FAR_Processed'
 
     # 3. Load workbook
     wb = openpyxl.load_workbook(excel_file)
@@ -1204,7 +1171,7 @@ def process_far_file(uploaded_file):
         # Remove gridlines from FAR sheet
         ws_far.sheet_view.showGridLines = False
         # Extract FAR data from the current workbook
-        df_raw = pd.read_excel(input_file, sheet_name='FAR', header=None, engine='openpyxl')
+    df_raw = pd.read_excel(excel_file, sheet_name='FAR', header=None)
         static_headers = [
             'Purchase Date',
             'Details',
@@ -1262,7 +1229,7 @@ def process_far_file(uploaded_file):
         if 'Account Transactions' in wb.sheetnames:
             ws_trans = wb['Account Transactions']
             # Read as DataFrame for easier processing
-            df_trans_raw = pd.read_excel(input_file, sheet_name='Account Transactions', header=None, engine='openpyxl')
+    df_trans_raw = pd.read_excel(excel_file, sheet_name='Account Transactions', header=None)
             header_row_idx = 4  # Row 5 in Excel (0-based)
             headers = list(df_trans_raw.iloc[header_row_idx].fillna('').astype(str))
             header_map = {h.strip().lower(): i for i, h in enumerate(headers)}
@@ -1828,7 +1795,7 @@ def process_far_file(uploaded_file):
     # 4. Save the modified workbook to output folder
     safe_name = re.sub(r'[^A-Za-z0-9._-]', '_', str(output_base_name))
     far_output_name = f'{safe_name}.xlsx'
-    # Removed output_path and local save, only use BytesIO for output
+    # Remove local output saving. Only use BytesIO for output.
 
 
     
@@ -1838,7 +1805,7 @@ def process_far_file(uploaded_file):
     return output
 
 
-
+import streamlit as st
 
 # --- Custom CSS for modern look ---
 st.markdown("""
@@ -1932,25 +1899,17 @@ if uploaded_file is not None:
             with st.spinner("Processing... Please wait."):
                 st.image("https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExY2Uwbm5xeTQwd3A4eWU2bGU4Ym9pdjF0YWRkZzltcGJyOTE5czJ0ZCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/2bYewTk7K2No1NvcuK/giphy.gif", width=80)
                 try:
-                    st.write("Debug: Starting file processing...")
                     output_bytes = process_far_file(uploaded_file)
-                    if output_bytes is None:
-                        st.session_state['processing'] = False
-                        st.error("No output was generated. Please check your input file and try again.")
-                    else:
-                        output_data = output_bytes.getvalue()
-                        st.session_state['processing'] = False
-                        st.markdown("<div style='font-size:1.1rem; color: #155724;'><span style='font-size:1.5rem;'>✅</span> <b>File processed successfully!</b> Download is ready.</div>", unsafe_allow_html=True)
-                        st.download_button(
-                            label="⬇️ Download Processed Excel",
-                            data=output_data,
-                            file_name="FAR_Processed.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
+                    output_data = output_bytes.getvalue()
+                    st.session_state['processing'] = False
+                    st.markdown("<div style='font-size:1.1rem; color: #155724;'><span style='font-size:1.5rem;'>✅</span> <b>File processed successfully!</b> Download is ready.</div>", unsafe_allow_html=True)
+                    st.download_button(
+                        label="⬇️ Download Processed Excel",
+                        data=output_data,
+                        file_name="FAR_Processed.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
                 except Exception as e:
                     st.session_state['processing'] = False
-                    st.error(f"❌ Processing failed: {e}")
-                    import traceback
-                    st.write("Traceback:")
-                    st.code(traceback.format_exc())
+                    st.markdown(f"<div style='font-size:1.1rem; color: #721c24;'><span style='font-size:1.5rem;'>❌</span> <b>Processing failed:</b> {e}</div>", unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
