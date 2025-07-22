@@ -1910,17 +1910,25 @@ if uploaded_file is not None:
             with st.spinner("Processing... Please wait."):
                 st.image("https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExY2Uwbm5xeTQwd3A4eWU2bGU4Ym9pdjF0YWRkZzltcGJyOTE5czJ0ZCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/2bYewTk7K2No1NvcuK/giphy.gif", width=80)
                 try:
+                    st.write("Debug: Starting file processing...")
                     output_bytes = process_far_file(uploaded_file)
-                    output_data = output_bytes.getvalue()
-                    st.session_state['processing'] = False
-                    st.markdown("<div style='font-size:1.1rem; color: #155724;'><span style='font-size:1.5rem;'>✅</span> <b>File processed successfully!</b> Download is ready.</div>", unsafe_allow_html=True)
-                    st.download_button(
-                        label="⬇️ Download Processed Excel",
-                        data=output_data,
-                        file_name="FAR_Processed.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
+                    if output_bytes is None:
+                        st.session_state['processing'] = False
+                        st.error("No output was generated. Please check your input file and try again.")
+                    else:
+                        output_data = output_bytes.getvalue()
+                        st.session_state['processing'] = False
+                        st.markdown("<div style='font-size:1.1rem; color: #155724;'><span style='font-size:1.5rem;'>✅</span> <b>File processed successfully!</b> Download is ready.</div>", unsafe_allow_html=True)
+                        st.download_button(
+                            label="⬇️ Download Processed Excel",
+                            data=output_data,
+                            file_name="FAR_Processed.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
                 except Exception as e:
                     st.session_state['processing'] = False
-                    st.markdown(f"<div style='font-size:1.1rem; color: #721c24;'><span style='font-size:1.5rem;'>❌</span> <b>Processing failed:</b> {e}</div>", unsafe_allow_html=True)
+                    st.error(f"❌ Processing failed: {e}")
+                    import traceback
+                    st.write("Traceback:")
+                    st.code(traceback.format_exc())
         st.markdown('</div>', unsafe_allow_html=True)
