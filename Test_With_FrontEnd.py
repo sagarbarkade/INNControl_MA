@@ -2,7 +2,7 @@ import streamlit as st
 import io
 import pandas as pd
 import openpyxl
-import io
+
 from datetime import datetime
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 import re
@@ -116,7 +116,7 @@ def process_far_file(uploaded_file):
     # Convert uploaded file to BytesIO for pandas/openpyxl
     file_bytes = io.BytesIO(uploaded_file.read())
     file_bytes.seek(0)
-    import io
+    # removed duplicate import io
     import pandas as pd
     import openpyxl
     import re
