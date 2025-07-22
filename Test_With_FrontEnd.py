@@ -117,9 +117,17 @@ def process_far_file(uploaded_file):
     file_bytes.seek(0)
     excel_file = file_bytes
 
-    # Extract year_end_date and period_end_date from FAR sheet
-    excel_file.seek(0)
-    df_far_head = pd.read_excel(excel_file, sheet_name='FAR', header=None, nrows=5)
+    import zipfile
+    try:
+        excel_file.seek(0)
+        df_far_head = pd.read_excel(excel_file, sheet_name='FAR', header=None, nrows=5)
+        excel_file.seek(0)
+        wb = openpyxl.load_workbook(excel_file)
+    except Exception as e:
+        if isinstance(e, zipfile.BadZipFile) or 'File is not a zip file' in str(e) or 'Excel file format cannot be determined' in str(e):
+            raise ValueError("The uploaded file is not a valid Excel file. Please upload a .xlsx or .xls file.")
+        else:
+            raise
     year_end_date, period_end_date = None, None
     for i in range(5):
         row_vals = df_far_head.iloc[i].astype(str).tolist()
