@@ -127,7 +127,7 @@ def process_far_file(uploaded_file):
     import openpyxl
     import re
     from datetime import datetime
-    import streamlit as st
+
     st.write("Debug: Entered process_far_file")
     try:
         # Read uploaded file into BytesIO
@@ -1832,7 +1832,7 @@ def process_far_file(uploaded_file):
     return output
 
 
-import streamlit as st
+
 
 # --- Custom CSS for modern look ---
 st.markdown("""
