@@ -131,7 +131,7 @@ def process_far_file(uploaded_file):
 
         # Extract year_end_date and period_end_date from FAR sheet
         excel_file.seek(0)
-        df_far_head = pd.read_excel(excel_file, sheet_name='FAR', header=None, nrows=5)
+        df_far_head = pd.read_excel(excel_file, sheet_name='FAR', header=None, nrows=5, engine='openpyxl')
         year_end_date = None
         period_end_date = None
         for i in range(5):
@@ -167,13 +167,13 @@ def process_far_file(uploaded_file):
             ws_far = wb['FAR']
             ws_far.sheet_view.showGridLines = False
             excel_file.seek(0)
-            df_raw = pd.read_excel(excel_file, sheet_name='FAR', header=None)
+            df_raw = pd.read_excel(excel_file, sheet_name='FAR', header=None, engine='openpyxl')
             # ...rest of your FAR processing logic...
 
             if 'Account Transactions' in wb.sheetnames:
                 ws_trans = wb['Account Transactions']
                 excel_file.seek(0)
-                df_trans_raw = pd.read_excel(excel_file, sheet_name='Account Transactions', header=None)
+                df_trans_raw = pd.read_excel(excel_file, sheet_name='Account Transactions', header=None, engine='openpyxl')
                 # ...rest of your Account Transactions logic...
 
         st.write("Debug: Finished main processing logic")
@@ -193,7 +193,7 @@ def process_far_file(uploaded_file):
     # --- Place your main processing logic here, adapted from your Streamlit code ---
     # 1. Extract year_end_date and period_end_date from FAR sheet
     excel_file.seek(0)
-    df_far_head = pd.read_excel(excel_file, sheet_name='FAR', header=None, nrows=5)
+    df_far_head = pd.read_excel(excel_file, sheet_name='FAR', header=None, nrows=5, engine='openpyxl')
     year_end_date = None
     period_end_date = None
     for i in range(5):
@@ -1191,7 +1191,7 @@ def process_far_file(uploaded_file):
         # Remove gridlines from FAR sheet
         ws_far.sheet_view.showGridLines = False
         # Extract FAR data from the current workbook
-        df_raw = pd.read_excel(input_file, sheet_name='FAR', header=None)
+        df_raw = pd.read_excel(input_file, sheet_name='FAR', header=None, engine='openpyxl')
         static_headers = [
             'Purchase Date',
             'Details',
@@ -1249,7 +1249,7 @@ def process_far_file(uploaded_file):
         if 'Account Transactions' in wb.sheetnames:
             ws_trans = wb['Account Transactions']
             # Read as DataFrame for easier processing
-            df_trans_raw = pd.read_excel(input_file, sheet_name='Account Transactions', header=None)
+            df_trans_raw = pd.read_excel(input_file, sheet_name='Account Transactions', header=None, engine='openpyxl')
             header_row_idx = 4  # Row 5 in Excel (0-based)
             headers = list(df_trans_raw.iloc[header_row_idx].fillna('').astype(str))
             header_map = {h.strip().lower(): i for i, h in enumerate(headers)}
