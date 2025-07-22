@@ -1179,7 +1179,7 @@ def process_far_file(uploaded_file):
         # Remove gridlines from FAR sheet
         ws_far.sheet_view.showGridLines = False
         # Extract FAR data from the current workbook
-    df_raw = pd.read_excel(excel_file, sheet_name='FAR', header=None)
+        df_raw = pd.read_excel(excel_file, sheet_name='FAR', header=None)
         static_headers = [
             'Purchase Date',
             'Details',
@@ -1237,7 +1237,7 @@ def process_far_file(uploaded_file):
         if 'Account Transactions' in wb.sheetnames:
             ws_trans = wb['Account Transactions']
             # Read as DataFrame for easier processing
-    df_trans_raw = pd.read_excel(excel_file, sheet_name='Account Transactions', header=None)
+            df_trans_raw = pd.read_excel(excel_file, sheet_name='Account Transactions', header=None)
             header_row_idx = 4  # Row 5 in Excel (0-based)
             headers = list(df_trans_raw.iloc[header_row_idx].fillna('').astype(str))
             header_map = {h.strip().lower(): i for i, h in enumerate(headers)}
@@ -1272,8 +1272,8 @@ def process_far_file(uploaded_file):
                 df_trans = pd.concat(transactions, ignore_index=True)
             else:
                 df_trans = pd.DataFrame()
-        else:
-            df_trans = pd.DataFrame()
+    else:
+        df_trans = pd.DataFrame()
 
         updated_tables = []
         for table_name, table_df in tables:
