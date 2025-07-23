@@ -117,17 +117,9 @@ def process_far_file(uploaded_file):
     file_bytes.seek(0)
     excel_file = file_bytes
 
-    import zipfile
-    try:
-        excel_file.seek(0)
-        df_far_head = pd.read_excel(excel_file, sheet_name='FAR', header=None, nrows=5)
-        excel_file.seek(0)
-        wb = openpyxl.load_workbook(excel_file)
-    except Exception as e:
-        if isinstance(e, zipfile.BadZipFile) or 'File is not a zip file' in str(e) or 'Excel file format cannot be determined' in str(e):
-            raise ValueError("The uploaded file is not a valid Excel file. Please upload a .xlsx or .xls file.")
-        else:
-            raise
+    # Extract year_end_date and period_end_date from FAR sheet
+    excel_file.seek(0)
+    df_far_head = pd.read_excel(excel_file, sheet_name='FAR', header=None, nrows=5)
     year_end_date, period_end_date = None, None
     for i in range(5):
         row_vals = df_far_head.iloc[i].astype(str).tolist()
@@ -173,8 +165,20 @@ def process_far_file(uploaded_file):
     excel_file.seek(0)
     wb = openpyxl.load_workbook(excel_file)
 
-    # Removed all local folder/file references. Only use uploaded_file and in-memory BytesIO for Streamlit deployment.
-    # All file reading/writing should be done in-memory for Streamlit deployment.
+    input_folder = r"C:\\Users\\lenovo\\Desktop\\FAR_Test"
+    output_folder = r"C:\\Users\\lenovo\\Desktop\\Output"
+
+    # Find first Excel file in input folder
+    excel_files = glob.glob(os.path.join(input_folder, '*.xlsx')) + glob.glob(os.path.join(input_folder, '*.xls'))
+    if not excel_files:
+        print(f"No Excel files found in {input_folder}")
+        exit(1)
+
+    input_file = excel_files[0]
+    print(f"Processing: {input_file}")
+    file_bytes = open(input_file, 'rb')
+    excel_file = io.BytesIO(file_bytes.read())
+    file_bytes.close()
 
 
     # --- Place your main processing logic here, adapted from your Streamlit code ---
@@ -225,8 +229,7 @@ def process_far_file(uploaded_file):
     fy_end = pd.to_datetime(year_end_date)
     fy_start = fy_end - pd.DateOffset(years=1) + pd.DateOffset(days=1)
     mgmt_acct_month = pd.to_datetime(period_end_date)
-    # output_base_name can be a static string or derived from uploaded_file.name if needed
-    output_base_name = 'FAR_Processed'
+    output_base_name = os.path.splitext(os.path.basename(input_file))[0]
 
     # 3. Load workbook
     wb = openpyxl.load_workbook(excel_file)
@@ -1179,7 +1182,7 @@ def process_far_file(uploaded_file):
         # Remove gridlines from FAR sheet
         ws_far.sheet_view.showGridLines = False
         # Extract FAR data from the current workbook
-        df_raw = pd.read_excel(excel_file, sheet_name='FAR', header=None)
+        df_raw = pd.read_excel(input_file, sheet_name='FAR', header=None)
         static_headers = [
             'Purchase Date',
             'Details',
@@ -1237,7 +1240,7 @@ def process_far_file(uploaded_file):
         if 'Account Transactions' in wb.sheetnames:
             ws_trans = wb['Account Transactions']
             # Read as DataFrame for easier processing
-            df_trans_raw = pd.read_excel(excel_file, sheet_name='Account Transactions', header=None)
+            df_trans_raw = pd.read_excel(input_file, sheet_name='Account Transactions', header=None)
             header_row_idx = 4  # Row 5 in Excel (0-based)
             headers = list(df_trans_raw.iloc[header_row_idx].fillna('').astype(str))
             header_map = {h.strip().lower(): i for i, h in enumerate(headers)}
@@ -1272,8 +1275,8 @@ def process_far_file(uploaded_file):
                 df_trans = pd.concat(transactions, ignore_index=True)
             else:
                 df_trans = pd.DataFrame()
-    else:
-        df_trans = pd.DataFrame()
+        else:
+            df_trans = pd.DataFrame()
 
         updated_tables = []
         for table_name, table_df in tables:
@@ -1290,37 +1293,103 @@ def process_far_file(uploaded_file):
             if not df_trans.empty and 'Asset Type' in df_trans.columns:
                 matching_rows = df_trans[df_trans['Asset Type'] == table_name].reset_index(drop=True)
                 if not matching_rows.empty:
-                    # Build new_rows with all columns from updated_table
                     new_rows = pd.DataFrame()
-                    for col in updated_table.columns:
-                        if col in matching_rows.columns:
-                            new_rows[col] = matching_rows[col]
-                        else:
-                            new_rows[col] = 0
-                    # Remove any 'opening balance' or 'closing balance' rows
+                    new_rows['Purchase Date'] = matching_rows['Purchase Date']
+                    new_rows['Details'] = matching_rows['Details']
+                    new_rows['Cost'] = matching_rows['Cost']
+                    new_rows['Addition'] = 0
+                    new_rows['Total Cost'] = 0
+                    new_rows['Depreciation Rate'] = far_table_deprates.get(table_name.strip(), 0)
+                    new_rows['Accumulated Depreciation'] = 0
+                    for m in months:
+                        new_rows[m] = 0
                     if 'Details' in new_rows.columns:
                         new_rows = new_rows[~new_rows['Details'].astype(str).str.strip().str.lower().isin(['opening balance','closing balance'])]
-                    # Only add rows that are not already present
-                    merge_cols = ['Purchase Date', 'Details', 'Cost']
-                    def safe_str(x):
-                        if pd.isnull(x):
-                            return ''
-                        if isinstance(x, pd.Timestamp) or isinstance(x, datetime):
-                            return x.strftime('%Y-%m-%d')
+                    if not updated_table.empty:
+                        merge_cols = ['Purchase Date', 'Details', 'Cost']
+                        def safe_str(x):
+                            if pd.isnull(x):
+                                return ''
+                            if isinstance(x, pd.Timestamp) or isinstance(x, datetime):
+                                return x.strftime('%Y-%m-%d')
+                            try:
+                                dt = pd.to_datetime(x, errors='coerce')
+                                if pd.notnull(dt):
+                                    return dt.strftime('%Y-%m-%d')
+                            except Exception:
+                                pass
+                            return str(x)
+                        updated_table_key = updated_table[merge_cols].applymap(safe_str).agg('|'.join, axis=1)
+                        new_rows_key = new_rows[merge_cols].applymap(safe_str).agg('|'.join, axis=1)
+                        new_rows = new_rows[~new_rows_key.isin(updated_table_key)]
+                    for idx, row in new_rows.iterrows():
                         try:
-                            dt = pd.to_datetime(x, errors='coerce')
-                            if pd.notnull(dt):
-                                return dt.strftime('%Y-%m-%d')
+                            pdate = pd.to_datetime(row['Purchase Date'], errors='coerce')
                         except Exception:
-                            pass
-                        return str(x)
-                    updated_table_key = updated_table[merge_cols].applymap(safe_str).agg('|'.join, axis=1)
-                    new_rows_key = new_rows[merge_cols].applymap(safe_str).agg('|'.join, axis=1)
-                    new_rows = new_rows[~new_rows_key.isin(updated_table_key)]
-                    # Append new rows
+                            pdate = None
+                        purchase_amt = pd.to_numeric(row['Cost'], errors='coerce') if pd.notnull(row['Cost']) else 0
+                        if pd.notnull(pdate) and fy_start <= pdate <= fy_end:
+                            new_rows.at[idx, 'Addition'] = purchase_amt
+                            new_rows.at[idx, 'Cost'] = 0
+                        else:
+                            new_rows.at[idx, 'Addition'] = 0
+                            new_rows.at[idx, 'Cost'] = purchase_amt
+                    new_rows['Total Cost'] = pd.to_numeric(new_rows['Cost'], errors='coerce').fillna(0) + pd.to_numeric(new_rows['Addition'], errors='coerce').fillna(0)
+                    for idx, row in new_rows.iterrows():
+                        try:
+                            pdate = pd.to_datetime(row['Purchase Date'], errors='coerce')
+                        except Exception:
+                            pdate = None
+                        total_cost = pd.to_numeric(row['Total Cost'], errors='coerce')
+                        dep_rate = pd.to_numeric(row['Depreciation Rate'], errors='coerce')
+                        last_fy_month = fy_start - pd.DateOffset(months=1)
+                        months_in_use = 0
+                        if pd.notnull(pdate) and pdate <= last_fy_month:
+                            months_in_use = (last_fy_month.year - pdate.year) * 12 + (last_fy_month.month - pdate.month) + 1
+                            if months_in_use < 0:
+                                months_in_use = 0
+                        monthly_dep = (total_cost * dep_rate / 100) / 12 if total_cost and dep_rate else 0
+                        acc_dep = monthly_dep * months_in_use
+                        new_rows.at[idx, 'Accumulated Depreciation'] = acc_dep
+                    for idx, row in new_rows.iterrows():
+                        try:
+                            pdate = pd.to_datetime(row['Purchase Date'], errors='coerce')
+                        except Exception:
+                            pdate = None
+                        total_cost = pd.to_numeric(row['Total Cost'], errors='coerce')
+                        dep_rate = pd.to_numeric(row['Depreciation Rate'], errors='coerce')
+                        monthly_dep = (total_cost * dep_rate / 100) / 12 if total_cost and dep_rate else 0
+                        for m in months:
+                            try:
+                                m_str = m.replace('Dep', '').strip()
+                                m_dt = pd.to_datetime(m_str, format='%b-%y')
+                            except Exception:
+                                m_dt = None
+                            if pd.notnull(pdate) and pd.notnull(m_dt):
+                                if (pdate <= m_dt + pd.offsets.MonthEnd(0)) and (m_dt <= mgmt_acct_month):
+                                    new_rows.at[idx, m] = monthly_dep
+                                elif m_dt > mgmt_acct_month:
+                                    new_rows.at[idx, m] = ''
+                                else:
+                                    new_rows.at[idx, m] = 0
+                            else:
+                                new_rows.at[idx, m] = ''
+                    dep_month_cols = months
+                    acc_dep_col_name = 'Accumulated Depreciation'
+                    total_cost_col_name = 'Total Cost'
+                    new_rows['Total Depreciation'] = pd.to_numeric(new_rows[acc_dep_col_name], errors='coerce').fillna(0) + new_rows[dep_month_cols].apply(pd.to_numeric, errors='coerce').fillna(0).sum(axis=1)
+                    new_rows['WDV'] = pd.to_numeric(new_rows[total_cost_col_name], errors='coerce').fillna(0) - new_rows['Total Depreciation']
+                    if 'Total Depreciation' not in updated_table.columns:
+                        updated_table['Total Depreciation'] = 0
+                    if 'WDV' not in updated_table.columns:
+                        updated_table['WDV'] = 0
+                    full_cols = static_headers + months + ['Total Depreciation', 'WDV']
+                    updated_table = updated_table.reindex(columns=full_cols, fill_value=0)
+                    new_rows = new_rows.reindex(columns=full_cols, fill_value=0)
                     if not new_rows.empty:
                         print(f"Appending {len(new_rows)} new transaction row(s) to table '{table_name}'")
-                        updated_table = pd.concat([updated_table, new_rows], ignore_index=True)
+                    combined_table = pd.concat([updated_table, new_rows], ignore_index=True)
+                    updated_table = combined_table
             dep_rate_val = far_table_deprates.get(table_name.strip(), 0)
             for col in ['Addition', 'Total Cost', 'Depreciation Rate', 'Accumulated Depreciation'] + months:
                 if col not in updated_table.columns:
@@ -1737,7 +1806,9 @@ def process_far_file(uploaded_file):
     # 4. Save the modified workbook to output folder
     safe_name = re.sub(r'[^A-Za-z0-9._-]', '_', str(output_base_name))
     far_output_name = f'{safe_name}.xlsx'
-    # Remove local output saving. Only use BytesIO for output.
+    output_path = os.path.join(output_folder, far_output_name)
+    wb.save(output_path)
+    print(f"Done! Output saved to: {output_path}")
 
 
     
