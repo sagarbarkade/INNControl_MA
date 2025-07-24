@@ -697,8 +697,8 @@ def process_far_file(file_content):
                         netProfit = netProfitBeforeTax + depreciation
                         netProfitYTD = netProfitBeforeTaxYTD + depreciationYTD
                         # Tax rates
-                        taxRateUpTo50K = 0.19
-                        taxRateAbove50K = 0.265
+                        taxRateUpTo50K = 0.25
+                        taxRateAbove50K = 0.25
                         # CT charge for Monthly Net Profit
                         if netProfit < 0:
                             ctChargeMonthly = 0
