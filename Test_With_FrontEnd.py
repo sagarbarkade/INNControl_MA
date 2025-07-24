@@ -1778,42 +1778,41 @@ def process_far_file(file_content):
     output = BytesIO()
     wb.save(output)
     output.seek(0)
-
-    st.download_button(
-        label="Download Updated File",
-        data=output.getvalue(),
-        file_name="Processed.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
     return output
 
 import streamlit as st
 
-# --- Custom CSS for modern look ---
+# --- Custom CSS for full-width layout and bigger logo ---
 st.markdown("""
     <style>
-    .main {
+    .main, .stApp {
         background-color: #f7f9fa;
+        width: 100%;
+        min-height: 100vh;
+        margin: 0;
+        padding: 0;
     }
     .header-bar {
-        background: linear-gradient(90deg, #003366 0%, #005fa3 100%);
-        color: white;
-        padding: 1.2rem 0 0.7rem 0;
-        margin-bottom: 1.5rem;
-        border-radius: 0 0 18px 18px;
-        text-align: center;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.07);
-    }
-    .stApp {
-        background-color: #f7f9fa;
-    }
+    background: linear-gradient(90deg, #003366 0%, #005fa3 100%);
+    color: white;
+    padding: 1.2rem 0 0.7rem 0;
+    margin-bottom: 1.5rem;
+    border-radius: 0 0 18px 18px;
+    text-align: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+    width: 100%;         /* Full viewport width */
+    margin-left: 0;
+    margin-right: 0;
+    box-sizing: border-box;
+}
     .card {
         background: white;
         border-radius: 16px;
         box-shadow: 0 2px 12px rgba(0,0,0,0.08);
         padding: 2rem 2.5rem 2rem 2.5rem;
-        margin: 0 auto 2rem auto;
-        max-width: 500px;
+        margin: 2rem auto;
+        max-width: 1200px; /* increase width */
+        width: 95vw; /* fill viewport */
     }
     .centered {
         display: flex;
@@ -1821,7 +1820,6 @@ st.markdown("""
         align-items: center;
         justify-content: center;
     }
-    /* Pin logo to top left */
     .top-left-logo {
         position: fixed;
         top: 18px;
@@ -1832,21 +1830,18 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+
 # --- Header Bar with Logo and Title ---
-# Pin logo to top left using st.image and CSS
 st.markdown('<div class="top-left-logo">', unsafe_allow_html=True)
-st.image("Corient_Logo-01.jpg", width=90)
+st.image("Corient_Logo-01.jpg", width=160)  # Bigger logo
 st.markdown('</div>', unsafe_allow_html=True)
-# Header bar without logo
-st.markdown(
-    """
-    <div class="header-bar" style="display:flex; flex-direction:column; align-items:center;">
-        <h1 style="margin-bottom:0.2rem; font-family:Gill Sans MT,Arial,sans-serif; font-size:2.2rem;">INNControl Processor</h1>
-        <div style="font-size:1.1rem; opacity:0.92;">Upload an Excel file to process and download the result.</div>
+
+st.markdown("""
+    <div class="header-bar">
+        <h1 style="margin-bottom:0.2rem; font-family:Gill Sans MT,Arial,sans-serif; font-size:2.5rem;">INNControl Processor</h1>
+        <div style="font-size:1.3rem; opacity:0.92;">Upload an Excel file to process and download the result.</div>
     </div>
-    """,
-    unsafe_allow_html=True
-)
+""", unsafe_allow_html=True)
 
 
 # --- Card-style Upload Section ---
@@ -1858,6 +1853,8 @@ with st.container():
     <div class="card centered">
     """
     st.markdown(upload_card, unsafe_allow_html=True)
+
+
 from io import BytesIO
 from openpyxl import load_workbook
 import pandas as pd
@@ -1878,10 +1875,10 @@ if uploaded_file is not None:
         wb = load_workbook(excel_for_openpyxl)
         xls = pd.ExcelFile(excel_for_pandas, engine="openpyxl")
 
-        for sheet in xls.sheet_names:
-            df = pd.read_excel(xls, sheet_name=sheet, engine="openpyxl")
-            st.write(f"Sheet: {sheet}")
-            st.dataframe(df)
+       # for sheet in xls.sheet_names:
+        #    df = pd.read_excel(xls, sheet_name=sheet, engine="openpyxl")
+         #   st.write(f"Sheet: {sheet}")
+         #   st.dataframe(df)
 
     except Exception as e:
         st.error(f"❌ Processing failed: {str(e)}")
@@ -1910,7 +1907,7 @@ if uploaded_file is not None:
         else:
             st.markdown(f"<div style='font-size:1.1rem;'><span style='font-size:1.5rem;'>📄</span> <b>Processing:</b> {uploaded_file.name}</div>", unsafe_allow_html=True)
             with st.spinner("Processing... Please wait."):
-                st.image("https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExY2Uwbm5xeTQwd3A4eWU2bGU4Ym9pdjF0YWRkZzltcGJyOTE5czJ0ZCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/2bYewTk7K2No1NvcuK/giphy.gif", width=80)
+                st.image("https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExY2Uwbm5xeTQwd3A4eWU2bGU4Ym9pdjF0YWRkZzltcGJyOTE5czJ0ZCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/2bYewTk7K2No1NvcuK/giphy.gif", width=200)
                 try:
                    
                     output_bytes = process_far_file(file_content)
@@ -1920,7 +1917,7 @@ if uploaded_file is not None:
                     st.download_button(
                         label="⬇️ Download Processed Excel",
                         data=output_data,
-                        file_name="FAR_Processed.xlsx",
+                        file_name="MA_Processed.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
                 except Exception as e:
