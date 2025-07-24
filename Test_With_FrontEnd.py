@@ -1839,7 +1839,7 @@ st.markdown('</div>', unsafe_allow_html=True)
 st.markdown("""
     <div class="header-bar">
         <h1 style="margin-bottom:0.2rem; font-family:Gill Sans MT,Arial,sans-serif; font-size:2.5rem;">INNControl Processor</h1>
-        <div style="font-size:1.3rem; opacity:0.92;">Upload an Excel file to process and download the result.</div>
+        
     </div>
 """, unsafe_allow_html=True)
 
