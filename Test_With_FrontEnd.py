@@ -31,6 +31,65 @@ def extract_far_dates(ws):
         raise ValueError(f"Failed to extract FAR dates: {e}")
 
 # Utility Functions
+# Utility Functions
+def safe_float(value, context="unknown"):
+    """
+    Safely convert a value to float, handling strings and None values.
+    Used to prevent string subtraction errors in Excel cell operations.
+    """
+    if value is None:
+        return 0.0
+    
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return 0.0
+
+def find_account_row(wsTrans, accountName):
+    """
+    Find the row index of an account in Account Transactions sheet.
+    Returns None if account not found.
+    """
+    for rowIndex in range(1, wsTrans.max_row + 1):
+        if wsTrans.cell(row=rowIndex, column=1).value == accountName:
+            return rowIndex
+    return None
+
+def create_fresh_stream(original_content):
+    """Create a fresh BytesIO stream from original content"""
+    return BytesIO(original_content)
+
+def extract_month_key(transaction_date, format_type="MMMM YYYY"):
+    """
+    Extract standardized month key from transaction date
+    
+    Args:
+        transaction_date: Date value from Excel cell
+        format_type: Format type - "MMMM YYYY" (e.g., "January 2024") or "MMM YYYY" (e.g., "Jan 2024")
+    
+    Returns:
+        str: Formatted month key or empty string if invalid
+    """
+    if isinstance(transaction_date, datetime):
+        if format_type == "MMM YYYY":
+            return transaction_date.strftime("%b %Y")
+        else:
+            return transaction_date.strftime("%B %Y")
+    elif transaction_date:
+        try:
+            dt = pd.to_datetime(transaction_date, errors='coerce')
+            if pd.notna(dt):
+                if format_type == "MMM YYYY":
+                    return dt.strftime("%b %Y")
+                else:
+                    return dt.strftime("%B %Y")
+            else:
+                return str(transaction_date)[:7]
+        except Exception:
+            return str(transaction_date)[:7]
+    else:
+        return ""
+
 def apply_tax_component_formatting(ws):
     start_row, end_row = 15, 27
     start_col, end_col = 7, 9  # G=7, H=8, I=9
@@ -132,35 +191,54 @@ def _month_sort_key(x):
         return (0, dt)
     return (1, str(x))
 
+class FormatProcessorBase:
+    """Base class for all format processors with common functionality"""
+    
+    def __init__(self, target_sheet, transactions_sheet):
+        self.ws = target_sheet
+        self.wsTrans = transactions_sheet
+        self.accountName = target_sheet.cell(row=4, column=1).value
+        
+    def find_account_row(self):
+        """Find account row in transactions sheet"""
+        return find_account_row(self.wsTrans, self.accountName)
+    
+    def get_opening_balance(self, accountRow, format_type="I_minus_H"):
+        """Get opening balance with different calculation methods"""
+        accountRow = accountRow + 1  # Move to next row for balance
+        val_h_raw = self.wsTrans.cell(row=accountRow, column=8).value
+        val_i_raw = self.wsTrans.cell(row=accountRow, column=9).value
+        
+        if format_type == "I_minus_H":
+            return safe_float(val_i_raw, f"openingBalance col I row {accountRow}") - safe_float(val_h_raw, f"openingBalance col H row {accountRow}")
+        elif format_type == "H_minus_I":
+            return safe_float(val_h_raw, f"openingBalance col H row {accountRow}") - safe_float(val_i_raw, f"openingBalance col I row {accountRow}")
+        else:
+            return safe_float(val_i_raw, f"openingBalance col I row {accountRow}") - safe_float(val_h_raw, f"openingBalance col H row {accountRow}")
+    
+    def setup_summary_headers(self, headers, start_row=15):
+        """Setup standard summary table headers"""
+        for idx, header in enumerate(headers):
+            cell = self.ws.cell(row=start_row, column=idx + 1, value=header)
+            cell.font = openpyxl.styles.Font(bold=True)
+        return start_row + 1
+
 # Main Processing Function (full business logic from your Test.py)
 def process_far_file(file_content):
-    def safe_float(value, context="unknown"):
-        """
-        Safely convert a value to float, handling strings and None values.
-        Used to prevent string subtraction errors in Excel cell operations.
-        """
-        if value is None:
-            return 0.0
-        
-        try:
-            return float(value)
-        except (ValueError, TypeError):
-            return 0.0
-    
+    """
+    Main processing function for FAR files.
+    Handles Excel file processing with multiple format types.
+    """
     # Store original content for multiple uses - avoid stream closure issues
     original_content = file_content
     
-    # Helper function to create fresh streams as needed
-    def get_fresh_stream():
-        return BytesIO(original_content)
-    
     # Load Excel data with fresh streams and data_only=True to avoid image issues
-    df = pd.read_excel(get_fresh_stream(), sheet_name='FAR', engine='openpyxl')
-    wb = openpyxl.load_workbook(get_fresh_stream(), data_only=True, read_only=False)
+    df = pd.read_excel(create_fresh_stream(original_content), sheet_name='FAR', engine='openpyxl')
+    wb = openpyxl.load_workbook(create_fresh_stream(original_content), data_only=True, read_only=False)
 
 
     # Extract year_end_date and period_end_date from FAR sheet
-    df_far_head = pd.read_excel(get_fresh_stream(), sheet_name='FAR', header=None, nrows=5, engine='openpyxl')
+    df_far_head = pd.read_excel(create_fresh_stream(original_content), sheet_name='FAR', header=None, nrows=5, engine='openpyxl')
     year_end_date, period_end_date = None, None
     for i in range(5):
         row_vals = df_far_head.iloc[i].astype(str).tolist()
@@ -295,870 +373,839 @@ def process_far_file(file_content):
                 fmt = functionName.lower()
                 # --- Format1 ---
                 if fmt == 'format1':
-                    ws = target_sheet
-                    wsTrans = wb["Account Transactions"]
-                    # Get the account head from A4
-                    accountName = ws.cell(row=4, column=1).value
-                    foundMatch = False
-                    accountRow = None
-                    for rowIndex in range(1, wsTrans.max_row + 1):
-                        if wsTrans.cell(row=rowIndex, column=1).value == accountName:
-                            foundMatch = True
-                            accountRow = rowIndex
-                            break
-                    if not foundMatch:
-                        # Optionally, print a warning or skip
+                    processor = FormatProcessorBase(target_sheet, wb["Account Transactions"])
+                    
+                    # Find account row
+                    accountRow = processor.find_account_row() 
+                    if accountRow is None:
+                        print(f"Account not found for Format1: {processor.accountName}")
                         continue
-                    # Move to the next row for opening balance calculation
-                    accountRow = accountRow + 1
-                    openingBalance = (wsTrans.cell(row=accountRow, column=9).value or 0) - (wsTrans.cell(row=accountRow, column=8).value or 0)
-                    startRow = accountRow + 1
+                    
+                    # Calculate opening balance (I - H)
+                    openingBalance = processor.get_opening_balance(accountRow, "I_minus_H")
+                    
+                    # Initialize data structures
                     accountDict = {}
                     uniqueMonths = set()
-                    for rowIndex in range(startRow, wsTrans.max_row + 1):
-                        val = wsTrans.cell(row=rowIndex, column=1).value
+                    
+                    # Process transactions starting from accountRow + 2
+                    for rowIndex in range(accountRow + 2, processor.wsTrans.max_row + 1):
+                        val = processor.wsTrans.cell(row=rowIndex, column=1).value
                         if val in ("Total", "Closing Balance"):
                             break
+                        
                         # Extract account name from Column R (18), starting at 8th character
-                        acc_name_val = wsTrans.cell(row=rowIndex, column=18).value
+                        acc_name_val = processor.wsTrans.cell(row=rowIndex, column=18).value
                         if acc_name_val:
                             currentAccountName = str(acc_name_val)[7:] if len(str(acc_name_val)) >= 8 else str(acc_name_val)
                         else:
                             currentAccountName = ""
-                        # Transaction date in Column A
-                        transactionDate = wsTrans.cell(row=rowIndex, column=1).value
-                        if isinstance(transactionDate, datetime):
-                            monthKey = transactionDate.strftime("%b %Y")
-                        elif transactionDate:
-                            try:
-                                dt = pd.to_datetime(transactionDate, errors='coerce')
-                                if pd.notna(dt):
-                                    monthKey = dt.strftime("%b %Y")
-                                else:
-                                    continue
-                            except Exception:
-                                continue
-                        else:
+                        
+                        # Extract transaction date and get month key
+                        transactionDate = processor.wsTrans.cell(row=rowIndex, column=1).value
+                        monthKey = extract_month_key(transactionDate, format_type="MMM YYYY")
+                        if not monthKey:
                             continue
+                        
+                        # Add to unique months set
                         uniqueMonths.add(monthKey)
+                        
+                        # Initialize account entry if not exists
                         if currentAccountName not in accountDict:
                             accountDict[currentAccountName] = {}
                         if monthKey not in accountDict[currentAccountName]:
                             accountDict[currentAccountName][monthKey] = 0
-                        val_i = wsTrans.cell(row=rowIndex, column=9).value or 0
-                        val_h = wsTrans.cell(row=rowIndex, column=8).value or 0
+                        
+                        # Calculate transaction value (I - H)
+                        val_i_raw = processor.wsTrans.cell(row=rowIndex, column=9).value
+                        val_h_raw = processor.wsTrans.cell(row=rowIndex, column=8).value
+                        val_i = safe_float(val_i_raw, f"format1 val_i row {rowIndex}")
+                        val_h = safe_float(val_h_raw, f"format1 val_h row {rowIndex}")
                         accountDict[currentAccountName][monthKey] += val_i - val_h
+                    
                     # Generate the summary table
                     summaryStartRow = 15
-                    ws.cell(row=summaryStartRow, column=1).value = "Account Name"
-                    ws.cell(row=summaryStartRow, column=2).value = "Opening Balance"
-                    # Sort months chronologically
+                    processor.ws.cell(row=summaryStartRow, column=1).value = "Account Name"
+                    processor.ws.cell(row=summaryStartRow, column=2).value = "Opening Balance"
+                    
+                    # Sort months chronologically and add headers
                     sortedMonths = sorted(uniqueMonths, key=_month_sort_key)
                     for idx, month in enumerate(sortedMonths):
-                        ws.cell(row=summaryStartRow, column=3 + idx).value = month
-                    ws.cell(row=summaryStartRow, column=3 + len(sortedMonths)).value = "Closing Balance"
+                        processor.ws.cell(row=summaryStartRow, column=3 + idx).value = month
+                    processor.ws.cell(row=summaryStartRow, column=3 + len(sortedMonths)).value = "Closing Balance"
+                    
                     # Fill in the summary data for each account
                     summaryRow = summaryStartRow + 1
                     for currentAccountName in accountDict.keys():
-                        ws.cell(row=summaryRow, column=1).value = currentAccountName
-                        ws.cell(row=summaryRow, column=2).value = None  # Opening balance per account not tracked in VBA
+                        processor.ws.cell(row=summaryRow, column=1).value = currentAccountName
+                        processor.ws.cell(row=summaryRow, column=2).value = None  # Opening balance per account not tracked
                         for idx, month in enumerate(sortedMonths):
-                            ws.cell(row=summaryRow, column=3 + idx).value = accountDict[currentAccountName].get(month, 0)
+                            processor.ws.cell(row=summaryRow, column=3 + idx).value = accountDict[currentAccountName].get(month, 0)
                         summaryRow += 1
+                    
                     # Add the total row
-                    ws.cell(row=summaryRow, column=1).value = "Total"
-                    ws.cell(row=summaryRow, column=2).value = openingBalance
+                    processor.ws.cell(row=summaryRow, column=1).value = "Total"
+                    processor.ws.cell(row=summaryRow, column=2).value = openingBalance
+                    
+                    # Calculate monthly totals and final closing balance
+                    totalClosingBalance = openingBalance
                     for idx, month in enumerate(sortedMonths):
                         totalSum = sum(accountDict[acc].get(month, 0) for acc in accountDict)
-                        ws.cell(row=summaryRow, column=3 + idx).value = totalSum
-                    # Calculate and place the final closing balance in the last column of the total row
-                    totalClosingBalance = openingBalance
-                    for idx in range(len(sortedMonths)):
-                        val = ws.cell(row=summaryRow, column=3 + idx).value or 0
-                        totalClosingBalance += val
-                    ws.cell(row=summaryRow, column=3 + len(sortedMonths)).value = totalClosingBalance
-                    # Set headers and total row bold
+                        processor.ws.cell(row=summaryRow, column=3 + idx).value = totalSum
+                        totalClosingBalance += totalSum
+                    
+                    # Set final closing balance
+                    processor.ws.cell(row=summaryRow, column=3 + len(sortedMonths)).value = totalClosingBalance
+                    
+                    # Apply bold formatting to headers and total row
                     for col in range(1, 4 + len(sortedMonths)):
-                        ws.cell(row=summaryStartRow, column=col).font = openpyxl.styles.Font(bold=True)
-                        ws.cell(row=summaryRow, column=col).font = openpyxl.styles.Font(bold=True)
+                        processor.ws.cell(row=summaryStartRow, column=col).font = openpyxl.styles.Font(bold=True)
+                        processor.ws.cell(row=summaryRow, column=col).font = openpyxl.styles.Font(bold=True)
+                    
                     # Apply summary table formatting
-                    format_summary_table(ws, start_row=15)
+                    format_summary_table(processor.ws, start_row=15)
                 # --- Format2 ---
                 elif fmt == 'format2':
-                    ws = target_sheet
-                    wsTrans = wb["Account Transactions"]
-                    accountName = ws.cell(row=4, column=1).value
-                    lastRow = wsTrans.max_row
+                    processor = FormatProcessorBase(target_sheet, wb["Account Transactions"])
+                    
+                    # Setup headers from row 5 of Account Transactions (preserving original headers)
                     summaryStartRow = 15
-                    # Set headers from row 5 of Account Transactions
-                    ws.cell(row=summaryStartRow, column=1).value = wsTrans.cell(row=5, column=1).value
-                    ws.cell(row=summaryStartRow, column=2).value = wsTrans.cell(row=5, column=2).value
-                    ws.cell(row=summaryStartRow, column=3).value = wsTrans.cell(row=5, column=5).value
-                    ws.cell(row=summaryStartRow, column=4).value = wsTrans.cell(row=5, column=7).value
-                    ws.cell(row=summaryStartRow, column=5).value = wsTrans.cell(row=5, column=8).value
-                    ws.cell(row=summaryStartRow, column=6).value = wsTrans.cell(row=5, column=9).value
-                    summaryStartRow += 1
-                    foundAccount = False
+                    processor.ws.cell(row=summaryStartRow, column=1).value = processor.wsTrans.cell(row=5, column=1).value
+                    processor.ws.cell(row=summaryStartRow, column=2).value = processor.wsTrans.cell(row=5, column=2).value
+                    processor.ws.cell(row=summaryStartRow, column=3).value = processor.wsTrans.cell(row=5, column=5).value
+                    processor.ws.cell(row=summaryStartRow, column=4).value = processor.wsTrans.cell(row=5, column=7).value
+                    processor.ws.cell(row=summaryStartRow, column=5).value = processor.wsTrans.cell(row=5, column=8).value
+                    processor.ws.cell(row=summaryStartRow, column=6).value = processor.wsTrans.cell(row=5, column=9).value
+                    
+                    # Make headers bold
+                    for col in range(1, 7):
+                        processor.ws.cell(row=summaryStartRow, column=col).font = openpyxl.styles.Font(bold=True)
+                    
+                    current_row = summaryStartRow + 1
+                    
+                    # Find account row
+                    accountRow = processor.find_account_row()
+                    if accountRow is None:
+                        print(f"Account not found for Format2: {processor.accountName}")
+                        continue
+                    
+                    # Initialize sums for closing balance calculation
                     sumH = 0
                     sumI = 0
-                    currentRow = 1
-                    for i in range(1, lastRow + 1):
-                        if wsTrans.cell(row=i, column=1).value == accountName:
-                            foundAccount = True
-                            currentRow = i + 1
-                            while currentRow <= lastRow:
-                                val = wsTrans.cell(row=currentRow, column=1).value
-                                if val is not None and (str(val).startswith("Total") or str(val).startswith("Closing Balance")):
-                                    break
-                                # Copy relevant columns
-                                ws.cell(row=summaryStartRow, column=1).value = wsTrans.cell(row=currentRow, column=1).value
-                                ws.cell(row=summaryStartRow, column=2).value = wsTrans.cell(row=currentRow, column=2).value
-                                ws.cell(row=summaryStartRow, column=3).value = wsTrans.cell(row=currentRow, column=5).value
-                                ws.cell(row=summaryStartRow, column=4).value = wsTrans.cell(row=currentRow, column=7).value
-                                ws.cell(row=summaryStartRow, column=5).value = wsTrans.cell(row=currentRow, column=8).value
-                                ws.cell(row=summaryStartRow, column=6).value = wsTrans.cell(row=currentRow, column=9).value
-                                # Update sums
-                                sumH += wsTrans.cell(row=currentRow, column=8).value or 0
-                                sumI += wsTrans.cell(row=currentRow, column=9).value or 0
-                                summaryStartRow += 1
-                                currentRow += 1
+                    
+                    # Copy transaction data starting from accountRow + 1
+                    for transactionRow in range(accountRow + 1, processor.wsTrans.max_row + 1):
+                        val = processor.wsTrans.cell(row=transactionRow, column=1).value
+                        if val is not None and (str(val).startswith("Total") or str(val).startswith("Closing Balance")):
                             break
-                    if not foundAccount:
-                        # Optionally, print a warning or skip
-                        continue
+                        
+                        # Copy relevant transaction columns (1,2,5,7,8,9 -> 1,2,3,4,5,6)
+                        processor.ws.cell(row=current_row, column=1).value = processor.wsTrans.cell(row=transactionRow, column=1).value
+                        processor.ws.cell(row=current_row, column=2).value = processor.wsTrans.cell(row=transactionRow, column=2).value
+                        processor.ws.cell(row=current_row, column=3).value = processor.wsTrans.cell(row=transactionRow, column=5).value
+                        processor.ws.cell(row=current_row, column=4).value = processor.wsTrans.cell(row=transactionRow, column=7).value
+                        processor.ws.cell(row=current_row, column=5).value = processor.wsTrans.cell(row=transactionRow, column=8).value
+                        processor.ws.cell(row=current_row, column=6).value = processor.wsTrans.cell(row=transactionRow, column=9).value
+                        
+                        # Update sums for closing balance calculation
+                        h_val_raw = processor.wsTrans.cell(row=transactionRow, column=8).value
+                        i_val_raw = processor.wsTrans.cell(row=transactionRow, column=9).value
+                        sumH += safe_float(h_val_raw, f"format2 sumH row {transactionRow}")
+                        sumI += safe_float(i_val_raw, f"format2 sumI row {transactionRow}")
+                        
+                        current_row += 1
+                    
                     # Calculate closing balance
                     closingBalance = sumI - sumH
-                    closingBalanceRow = summaryStartRow + 1
-                    ws.cell(row=closingBalanceRow, column=1).value = "Closing Balance"
+                    
+                    # Add Closing Balance row
+                    closingBalanceRow = current_row + 1
+                    processor.ws.cell(row=closingBalanceRow, column=1).value = "Closing Balance"
                     if closingBalance > 0:
-                        ws.cell(row=closingBalanceRow, column=5).value = closingBalance
+                        processor.ws.cell(row=closingBalanceRow, column=5).value = closingBalance
                     else:
-                        ws.cell(row=closingBalanceRow, column=6).value = abs(closingBalance)
+                        processor.ws.cell(row=closingBalanceRow, column=6).value = abs(closingBalance)
+                    
                     # Bold the Closing Balance row
                     for col in range(1, 7):
-                        ws.cell(row=closingBalanceRow, column=col).font = openpyxl.styles.Font(bold=True)
-                    # Paste the absolute value of the Closing Balance in C8
-                    ws.cell(row=8, column=3).value = abs(closingBalance)
-                    # Add the Total row
+                        processor.ws.cell(row=closingBalanceRow, column=col).font = openpyxl.styles.Font(bold=True)
+                    
+                    # Update cell C8 with absolute value of closing balance
+                    processor.ws.cell(row=8, column=3).value = abs(closingBalance)
+                    
+                    # Add Total row
                     totalRow = closingBalanceRow + 1
-                    ws.cell(row=totalRow, column=1).value = "Total"
-                    ws.cell(row=totalRow, column=5).value = sumH + (closingBalance if closingBalance > 0 else 0)
-                    ws.cell(row=totalRow, column=6).value = sumI - (closingBalance if closingBalance < 0 else 0)
+                    processor.ws.cell(row=totalRow, column=1).value = "Total"
+                    processor.ws.cell(row=totalRow, column=5).value = sumH + (closingBalance if closingBalance > 0 else 0)
+                    processor.ws.cell(row=totalRow, column=6).value = sumI - (closingBalance if closingBalance < 0 else 0)
+                    
                     # Bold the Total row
                     for col in range(1, 7):
-                        ws.cell(row=totalRow, column=col).font = openpyxl.styles.Font(bold=True)
+                        processor.ws.cell(row=totalRow, column=col).font = openpyxl.styles.Font(bold=True)
+                    
                     # Apply summary table formatting
-                    format_summary_table(ws, start_row=15)
+                    format_summary_table(processor.ws, start_row=15)
                 # --- Format3 ---
                 elif fmt == 'format3':
-                    ws = target_sheet
-                    wsTrans = wb["Account Transactions"]
+                    processor = FormatProcessorBase(target_sheet, wb["Account Transactions"])
+                    
                     # Get the period end date from cell A8
-                    periodEndDate = ws.cell(row=8, column=1).value
-                    # Validate date
+                    periodEndDate = processor.ws.cell(row=8, column=1).value
                     try:
                         periodEndDate_dt = pd.to_datetime(periodEndDate, errors='raise')
                     except Exception:
-                        # Optionally, print a warning or skip
+                        print(f"Invalid date in A8 for Format3: {periodEndDate}")
                         continue
-                    # Get the account head from A4
-                    accountName = ws.cell(row=4, column=1).value
-                    foundMatch = False
-                    accountRow = None
-                    for rowIndex in range(1, wsTrans.max_row + 1):
-                        if wsTrans.cell(row=rowIndex, column=1).value == accountName:
-                            foundMatch = True
-                            accountRow = rowIndex
-                            break
-                    if not foundMatch:
+                    
+                    # Find account and calculate balances
+                    accountRow = processor.find_account_row()
+                    if accountRow is None:
+                        print(f"Account head not found for Format3: {processor.accountName}")
                         continue
-                    # Move to the next row after the account header
-                    accountRow = accountRow + 1
-                    openingBalance = (wsTrans.cell(row=accountRow, column=9).value or 0) - (wsTrans.cell(row=accountRow, column=8).value or 0)
+                    
+                    # Calculate opening balance (I - H)
+                    openingBalance = processor.get_opening_balance(accountRow, "I_minus_H")
                     closingBalance = openingBalance
+                    
                     # Loop through transactions to calculate the closing balance
-                    for transactionRow in range(accountRow + 1, wsTrans.max_row + 1):
-                        val = wsTrans.cell(row=transactionRow, column=1).value
+                    for transactionRow in range(accountRow + 2, processor.wsTrans.max_row + 1):
+                        val = processor.wsTrans.cell(row=transactionRow, column=1).value
                         if val is not None and ("Total" in str(val) or "Closing Balance" in str(val)):
                             break
-                        val_i = wsTrans.cell(row=transactionRow, column=9).value or 0
-                        val_h = wsTrans.cell(row=transactionRow, column=8).value or 0
+                        val_i_raw = processor.wsTrans.cell(row=transactionRow, column=9).value
+                        val_h_raw = processor.wsTrans.cell(row=transactionRow, column=8).value
+                        val_i = safe_float(val_i_raw, f"format3 val_i row {transactionRow}")
+                        val_h = safe_float(val_h_raw, f"format3 val_h row {transactionRow}")
                         closingBalance += val_i - val_h
-                    # Start populating the summary table from row 15
-                    summaryStartRow = 15
-                    ws.cell(row=summaryStartRow, column=1).value = "Date"
-                    ws.cell(row=summaryStartRow, column=2).value = "Particular"
-                    ws.cell(row=summaryStartRow, column=3).value = "£"
-                    # Set headers bold
-                    for col in range(1, 4):
-                        ws.cell(row=summaryStartRow, column=col).font = openpyxl.styles.Font(bold=True)
-                    summaryStartRow += 1
-                    ws.cell(row=summaryStartRow, column=1).value = periodEndDate
-                    ws.cell(row=summaryStartRow, column=2).value = "Balance as per statement"
-                    ws.cell(row=summaryStartRow, column=3).value = ""
-                    summaryStartRow += 1
-                    ws.cell(row=summaryStartRow, column=1).value = periodEndDate
-                    ws.cell(row=summaryStartRow, column=2).value = "Balance as per Xero"
-                    ws.cell(row=summaryStartRow, column=3).value = closingBalance
+                    
+                    # Setup summary table headers
+                    headers = ["Date", "Particular", "£"]
+                    summaryStartRow = processor.setup_summary_headers(headers, 15)
+                    
+                    # Fill in reconciliation data
+                    processor.ws.cell(row=summaryStartRow, column=1).value = periodEndDate
+                    processor.ws.cell(row=summaryStartRow, column=2).value = "Balance as per statement"
+                    processor.ws.cell(row=summaryStartRow, column=3).value = ""  # Manual input placeholder
+                    
+                    processor.ws.cell(row=summaryStartRow + 1, column=1).value = periodEndDate
+                    processor.ws.cell(row=summaryStartRow + 1, column=2).value = "Balance as per Xero"
+                    processor.ws.cell(row=summaryStartRow + 1, column=3).value = closingBalance
+                    
                     # Apply summary table formatting
-                    format_summary_table(ws, start_row=15)
+                    format_summary_table(processor.ws, start_row=15)
                 # --- Format4 ---
-
                 elif fmt == 'format4':
-                    ws = target_sheet
-                    wsTrans = wb["Account Transactions"]
-                    accountName = ws.cell(row=4, column=1).value
-                    summaryRow = 15
-                    lastRow = wsTrans.max_row
-                    currentRow = 1
+                    processor = FormatProcessorBase(target_sheet, wb["Account Transactions"])
+                    
+                    # Find account row
+                    accountRow = processor.find_account_row()
+                    if accountRow is None:
+                        print(f"Account not found for Format4: {processor.accountName}")
+                        continue
+                    
+                    # Get opening balance from column I (row after account header)
+                    openingBalance_raw = processor.wsTrans.cell(row=accountRow + 1, column=9).value
+                    openingBalance = safe_float(openingBalance_raw, f"format4 openingBalance row {accountRow + 1}")
+                    
+                    # Dictionary to store monthly liability and payment data
                     monthDict = {}
-                    found = False
-                    while currentRow <= lastRow:
-                        if wsTrans.cell(row=currentRow, column=1).value == accountName:
-                            openingBalance = wsTrans.cell(row=currentRow + 1, column=9).value or 0
-                            currentRow = currentRow + 2
-                            # Process transactions until 'Total PAYE' or 'Closing Balance'
-                            while currentRow <= lastRow and wsTrans.cell(row=currentRow, column=1).value not in (None, "", "Total PAYE", "Closing Balance"):
-                                def safe_float(val):
-                                    try:
-                                        return float(val)
-                                    except (TypeError, ValueError):
-                                        return 0
-                                amountI = safe_float(wsTrans.cell(row=currentRow, column=9).value)
-                                amountH = safe_float(wsTrans.cell(row=currentRow, column=8).value)
-                                transactionDate = wsTrans.cell(row=currentRow, column=1).value
-                                # Extract monthKey
-                                if isinstance(transactionDate, datetime):
-                                    monthKey = transactionDate.strftime("%B %Y")
-                                elif transactionDate:
-                                    try:
-                                        dt = pd.to_datetime(transactionDate, errors='coerce')
-                                        if pd.notna(dt):
-                                            monthKey = dt.strftime("%B %Y")
-                                        else:
-                                            monthKey = str(transactionDate)[:7]
-                                    except Exception:
-                                        monthKey = str(transactionDate)[:7]
-                                else:
-                                    monthKey = ""
-                                if monthKey not in monthDict:
-                                    monthDict[monthKey] = {"liability": 0, "payment": 0}
-                                # Liabilities: sum I if not HMRC/NEST
-                                colC = wsTrans.cell(row=currentRow, column=3).value or ""
-                                colE = wsTrans.cell(row=currentRow, column=5).value or ""
-                                is_hmrc_nest = any(x in str(colC).upper() or x in str(colE).upper() for x in ["HMRC", "NEST"])
-                                if not is_hmrc_nest:
-                                    monthDict[monthKey]["liability"] += amountI
-                                # Payment: sum H if HMRC/NEST
-                                if is_hmrc_nest:
-                                    monthDict[monthKey]["payment"] += amountH
-                                # Subtract H from liabilities if Manual Journal in B
-                                colB = wsTrans.cell(row=currentRow, column=2).value or ""
-                                if str(colB).upper() == "MANUAL JOURNAL":
-                                    monthDict[monthKey]["liability"] -= amountH
-                                currentRow += 1
-                            # Output summary table headers
-                            ws.cell(row=summaryRow, column=1).value = "Month"
-                            ws.cell(row=summaryRow, column=2).value = "Liability"
-                            ws.cell(row=summaryRow, column=3).value = "Payment"
-                            ws.cell(row=summaryRow, column=4).value = "Outstanding"
-                            for col in range(1, 5):
-                                ws.cell(row=summaryRow, column=col).font = openpyxl.styles.Font(bold=True)
-                            summaryRow += 1
-                            # Opening balance row
-                            ws.cell(row=summaryRow, column=1).value = "Opening Balance"
-                            ws.cell(row=summaryRow, column=2).value = openingBalance
-                            ws.cell(row=summaryRow, column=4).value = openingBalance
-                            summaryRow += 1
-                            # Output each month's calculated values
-                            for monthKey in monthDict:
-                                liabilities = monthDict[monthKey]["liability"]
-                                payment = monthDict[monthKey]["payment"]
-                                outstanding = liabilities - payment
-                                ws.cell(row=summaryRow, column=1).value = monthKey
-                                ws.cell(row=summaryRow, column=2).value = liabilities
-                                ws.cell(row=summaryRow, column=3).value = payment
-                                ws.cell(row=summaryRow, column=4).value = outstanding
-                                summaryRow += 1
-                            # Calculate the total outstanding from the monthly entries including opening balance
-                            totalOutstanding = openingBalance
-                            for monthKey in monthDict:
-                                totalOutstanding += monthDict[monthKey]["liability"] - monthDict[monthKey]["payment"]
-                            ws.cell(row=summaryRow, column=1).value = "Outstanding Total"
-                            ws.cell(row=summaryRow, column=4).value = totalOutstanding
-                            found = True
+                    
+                    # Process transactions starting from accountRow + 2, until "Total PAYE" or "Closing Balance"
+                    for transactionRow in range(accountRow + 2, processor.wsTrans.max_row + 1):
+                        cell_value = processor.wsTrans.cell(row=transactionRow, column=1).value
+                        if cell_value in (None, "", "Total PAYE", "Closing Balance"):
                             break
-                        currentRow += 1
+                        
+                        # Extract transaction amounts
+                        amountI_raw = processor.wsTrans.cell(row=transactionRow, column=9).value
+                        amountH_raw = processor.wsTrans.cell(row=transactionRow, column=8).value
+                        amountI = safe_float(amountI_raw, f"format4 amountI row {transactionRow}")
+                        amountH = safe_float(amountH_raw, f"format4 amountH row {transactionRow}")
+                        
+                        # Extract transaction date and get month key
+                        transactionDate = processor.wsTrans.cell(row=transactionRow, column=1).value
+                        monthKey = extract_month_key(transactionDate)
+                        
+                        # Initialize month entry if not exists
+                        if monthKey not in monthDict:
+                            monthDict[monthKey] = {"liability": 0, "payment": 0}
+                        
+                        # Get transaction details from columns B, C, and E
+                        colB = str(processor.wsTrans.cell(row=transactionRow, column=2).value or "")
+                        colC = str(processor.wsTrans.cell(row=transactionRow, column=3).value or "")
+                        colE = str(processor.wsTrans.cell(row=transactionRow, column=5).value or "")
+                        
+                        # Check if transaction is HMRC/NEST related
+                        is_hmrc_nest = any(x in colC.upper() or x in colE.upper() for x in ["HMRC", "NEST"])
+                        
+                        # Liabilities: sum I if not HMRC/NEST
+                        if not is_hmrc_nest:
+                            monthDict[monthKey]["liability"] += amountI
+                        
+                        # Payment: sum H if HMRC/NEST
+                        if is_hmrc_nest:
+                            monthDict[monthKey]["payment"] += amountH
+                        
+                        # Subtract H from liabilities if Manual Journal in B
+                        if colB.upper() == "MANUAL JOURNAL":
+                            monthDict[monthKey]["liability"] -= amountH
+                    
+                    # Setup summary table headers
+                    headers = ["Month", "Liability", "Payment", "Outstanding"]
+                    summaryStartRow = processor.setup_summary_headers(headers, 15)
+                    
+                    # Write opening balance row
+                    processor.ws.cell(row=summaryStartRow, column=1).value = "Opening Balance"
+                    processor.ws.cell(row=summaryStartRow, column=2).value = openingBalance
+                    processor.ws.cell(row=summaryStartRow, column=4).value = openingBalance
+                    current_row = summaryStartRow + 1
+                    
+                    # Output each month's calculated values
+                    totalOutstanding = openingBalance
+                    for monthKey in monthDict:
+                        liabilities = monthDict[monthKey]["liability"]
+                        payment = monthDict[monthKey]["payment"]
+                        outstanding = liabilities - payment
+                        
+                        processor.ws.cell(row=current_row, column=1).value = monthKey
+                        processor.ws.cell(row=current_row, column=2).value = liabilities
+                        processor.ws.cell(row=current_row, column=3).value = payment
+                        processor.ws.cell(row=current_row, column=4).value = outstanding
+                        
+                        totalOutstanding += outstanding
+                        current_row += 1
+                    
+                    # Add outstanding total row
+                    processor.ws.cell(row=current_row, column=1).value = "Outstanding Total"
+                    processor.ws.cell(row=current_row, column=4).value = totalOutstanding
+                    
                     # Apply summary table formatting
-                    format_summary_table(ws, start_row=15)
+                    format_summary_table(processor.ws, start_row=15)
                 # --- Format5 ---
                 elif fmt == 'format5':
-                    # CorporationTaxSummaryTable logic
-                    ws = target_sheet
-                    wsTrans = wb["Account Transactions"]
-                    accountName = ws.cell(row=4, column=1).value
-                    summaryRow = 15
-                    lastRow = wsTrans.max_row
-                    currentRow = 1
+                    processor = FormatProcessorBase(target_sheet, wb["Account Transactions"])
+                    
+                    # Find account row
+                    accountRow = processor.find_account_row()
+                    if accountRow is None:
+                        print(f"Account not found for Format5: {processor.accountName}")
+                        continue
+                    
+                    # Get opening balance from column I (row after account header)
+                    openingBalance_raw = processor.wsTrans.cell(row=accountRow + 1, column=9).value
+                    openingBalance = safe_float(openingBalance_raw, f"format5 openingBalance row {accountRow + 1}")
+                    
+                    # Dictionary to store monthly data
                     monthDict = {}
-                    totalLiability = 0
-                    totalPayment = 0
-                    totalOutstanding = 0
-                    found = False
-                    while currentRow <= lastRow:
-                        if wsTrans.cell(row=currentRow, column=1).value == accountName:
-                            openingBalance = wsTrans.cell(row=currentRow + 1, column=9).value or 0
-                            currentRow = currentRow + 2
-                            # Process transactions
-                            while currentRow <= lastRow and wsTrans.cell(row=currentRow, column=1).value not in (None, "", "Closing Balance") and "Total" not in str(wsTrans.cell(row=currentRow, column=1).value):
-                                amountI = wsTrans.cell(row=currentRow, column=9).value or 0
-                                amountH = wsTrans.cell(row=currentRow, column=8).value or 0
-                                transactionDate = wsTrans.cell(row=currentRow, column=1).value
-                                # Extract monthKey
-                                if isinstance(transactionDate, datetime):
-                                    monthKey = transactionDate.strftime("%B %Y")
-                                elif transactionDate:
-                                    try:
-                                        dt = pd.to_datetime(transactionDate, errors='coerce')
-                                        if pd.notna(dt):
-                                            monthKey = dt.strftime("%B %Y")
-                                        else:
-                                            monthKey = str(transactionDate)[:7]
-                                    except Exception:
-                                        monthKey = str(transactionDate)[:7]
-                                else:
-                                    monthKey = ""
-                                if monthKey not in monthDict:
-                                    monthDict[monthKey] = {"totalI": 0, "totalH": 0, "payment": 0}
-                                # Update monthly totals for liabilities and payments based on Column C
-                                colC = wsTrans.cell(row=currentRow, column=3).value or ""
-                                colB = wsTrans.cell(row=currentRow, column=2).value or ""
-                                if str(colC).upper() != "HMRC":
-                                    monthDict[monthKey]["totalI"] += amountI
-                                if str(colB).upper() == "MANUAL JOURNAL":
-                                    monthDict[monthKey]["totalI"] -= amountH
-                                monthDict[monthKey]["totalH"] += amountH
-                                if str(colC).upper() == "HMRC":
-                                    monthDict[monthKey]["payment"] += amountH - amountI
-                                currentRow += 1
-                            # Output summary table headers
-                            ws.cell(row=summaryRow, column=1).value = "Month"
-                            ws.cell(row=summaryRow, column=2).value = "Liability"
-                            ws.cell(row=summaryRow, column=3).value = "Payment"
-                            ws.cell(row=summaryRow, column=4).value = "Outstanding"
-                            ws.cell(row=summaryRow, column=5).value = "Payment Date"
-                            for col in range(1, 6):
-                                ws.cell(row=summaryRow, column=col).font = openpyxl.styles.Font(bold=True)
-                            summaryRow += 1
-                            # Opening balance row
-                            ws.cell(row=summaryRow, column=1).value = "Opening Balance"
-                            ws.cell(row=summaryRow, column=2).value = openingBalance
-                            summaryRow += 1
-                            # Output each month's calculated values
-                            for monthKey in monthDict:
-                                liabilities = monthDict[monthKey]["totalI"]
-                                payment = monthDict[monthKey]["payment"]
-                                outstanding = liabilities - payment
-                                if outstanding < 0:
-                                    outstanding = 0
-                                ws.cell(row=summaryRow, column=1).value = monthKey
-                                ws.cell(row=summaryRow, column=2).value = liabilities
-                                ws.cell(row=summaryRow, column=3).value = payment
-                                ws.cell(row=summaryRow, column=4).value = outstanding
-                                totalLiability += liabilities
-                                totalPayment += payment
-                                summaryRow += 1
-                            # Add opening balance to total liabilities
-                            totalLiability += openingBalance
-                            # Write the Balance row
-                            totalOutstanding = totalLiability - totalPayment
-                            ws.cell(row=summaryRow, column=1).value = "Balance"
-                            ws.cell(row=summaryRow, column=2).value = totalLiability
-                            ws.cell(row=summaryRow, column=3).value = totalPayment
-                            ws.cell(row=summaryRow, column=4).value = totalOutstanding
-                            ws.cell(row=8, column=3).value = totalOutstanding
-                            # Number format for C8
-                            ws.cell(row=8, column=3).number_format = "_(* #,##0_);_(* (#,##0);_(* \"-\"??_);_(@_)"
-                            found = True
+                    
+                    # Process transactions starting from accountRow + 2
+                    for transactionRow in range(accountRow + 2, processor.wsTrans.max_row + 1):
+                        cell_value = processor.wsTrans.cell(row=transactionRow, column=1).value
+                        if (cell_value in (None, "", "Closing Balance") or 
+                            "Total" in str(cell_value)):
                             break
-                        currentRow += 1
-                    # CalculateTaxComponents logic
+                        
+                        # Extract transaction amounts
+                        amountI_raw = processor.wsTrans.cell(row=transactionRow, column=9).value
+                        amountH_raw = processor.wsTrans.cell(row=transactionRow, column=8).value
+                        amountI = safe_float(amountI_raw, f"format5 amountI row {transactionRow}")
+                        amountH = safe_float(amountH_raw, f"format5 amountH row {transactionRow}")
+                        
+                        # Extract transaction date and get month key
+                        transactionDate = processor.wsTrans.cell(row=transactionRow, column=1).value
+                        monthKey = extract_month_key(transactionDate)
+                        
+                        # Initialize month entry if not exists
+                        if monthKey not in monthDict:
+                            monthDict[monthKey] = {"totalI": 0, "totalH": 0, "payment": 0}
+                        
+                        # Get transaction details from columns B and C
+                        colC = str(processor.wsTrans.cell(row=transactionRow, column=3).value or "")
+                        colB = str(processor.wsTrans.cell(row=transactionRow, column=2).value or "")
+                        
+                        # Update monthly totals for liabilities and payments
+                        if colC.upper() != "HMRC":
+                            monthDict[monthKey]["totalI"] += amountI
+                        if colB.upper() == "MANUAL JOURNAL":
+                            monthDict[monthKey]["totalI"] -= amountH
+                        monthDict[monthKey]["totalH"] += amountH
+                        if colC.upper() == "HMRC":
+                            monthDict[monthKey]["payment"] += amountH - amountI
+                    
+                    # Setup summary table headers
+                    headers = ["Month", "Liability", "Payment", "Outstanding", "Payment Date"]
+                    summaryStartRow = processor.setup_summary_headers(headers, 15)
+                    
+                    # Write opening balance row
+                    processor.ws.cell(row=summaryStartRow, column=1).value = "Opening Balance"
+                    processor.ws.cell(row=summaryStartRow, column=2).value = openingBalance
+                    current_row = summaryStartRow + 1
+                    
+                    # Initialize running totals
+                    totalLiability = openingBalance
+                    totalPayment = 0
+                    
+                    # Output each month's calculated values
+                    for monthKey in monthDict:
+                        liabilities = monthDict[monthKey]["totalI"]
+                        payment = monthDict[monthKey]["payment"]
+                        outstanding = max(0, liabilities - payment)  # Ensure outstanding is not negative
+                        
+                        processor.ws.cell(row=current_row, column=1).value = monthKey
+                        processor.ws.cell(row=current_row, column=2).value = liabilities
+                        processor.ws.cell(row=current_row, column=3).value = payment
+                        processor.ws.cell(row=current_row, column=4).value = outstanding
+                        
+                        totalLiability += liabilities
+                        totalPayment += payment
+                        current_row += 1
+                    
+                    # Write the Balance row
+                    totalOutstanding = totalLiability - totalPayment
+                    processor.ws.cell(row=current_row, column=1).value = "Balance"
+                    processor.ws.cell(row=current_row, column=2).value = totalLiability
+                    processor.ws.cell(row=current_row, column=3).value = totalPayment
+                    processor.ws.cell(row=current_row, column=4).value = totalOutstanding
+                    
+                    # Update cell C8 with total outstanding
+                    processor.ws.cell(row=8, column=3).value = totalOutstanding
+                    processor.ws.cell(row=8, column=3).number_format = "_(* #,##0_);_(* (#,##0);_(* \"-\"??_);_(@_)"
+                    
+                    # Process P&L data for tax component calculations
                     wsPL = wb["P&L"] if "P&L" in wb.sheetnames else None
                     if wsPL:
-                        lastRowPL = wsPL.max_row
+                        # Initialize totals
                         netProfitBeforeTax = 0
                         depreciation = 0
                         netProfitBeforeTaxYTD = 0
                         depreciationYTD = 0
-                        for row in range(1, lastRowPL + 1):
+                        
+                        # Process P&L sheet data
+                        for row in range(1, wsPL.max_row + 1):
                             val = wsPL.cell(row=row, column=1).value
-                            # Safely convert cell values to float, skip if not possible
-                            def safe_float(cellval):
-                                try:
-                                    return float(cellval)
-                                except (TypeError, ValueError):
-                                    return 0
-                            if val and "Profit after Taxation" in str(val):
-                                netProfitBeforeTax += safe_float(wsPL.cell(row=row, column=2).value)
-                                netProfitBeforeTaxYTD += safe_float(wsPL.cell(row=row, column=3).value)
-                            if val and "Corporation Tax Expense" in str(val):
-                                netProfitBeforeTax += safe_float(wsPL.cell(row=row, column=2).value)
-                                netProfitBeforeTaxYTD += safe_float(wsPL.cell(row=row, column=3).value)
-                            if val and "Depreciation" in str(val):
-                                depreciation += safe_float(wsPL.cell(row=row, column=2).value)
-                                depreciationYTD += safe_float(wsPL.cell(row=row, column=3).value)
+                            if val:
+                                val_str = str(val)
+                                col2_val = safe_float(wsPL.cell(row=row, column=2).value, f"format5 PL col2 row {row}")
+                                col3_val = safe_float(wsPL.cell(row=row, column=3).value, f"format5 PL col3 row {row}")
+                                
+                                if "Profit after Taxation" in val_str or "Corporation Tax Expense" in val_str:
+                                    netProfitBeforeTax += col2_val
+                                    netProfitBeforeTaxYTD += col3_val
+                                elif "Depreciation" in val_str:
+                                    depreciation += col2_val
+                                    depreciationYTD += col3_val
+                        
+                        # Calculate net profit
                         netProfit = netProfitBeforeTax + depreciation
                         netProfitYTD = netProfitBeforeTaxYTD + depreciationYTD
-                        # Tax rates
+                        
+                        # Tax rates (configurable)
                         taxRateUpTo50K = 0.25
                         taxRateAbove50K = 0.25
-                        # CT charge for Monthly Net Profit
-                        if netProfit < 0:
-                            ctChargeMonthly = 0
-                        elif netProfit < 50000:
-                            ctChargeMonthly = netProfit * taxRateUpTo50K
-                        else:
-                            ctChargeMonthly = netProfit * taxRateAbove50K
-                        # CT charge for YTD Net Profit
-                        if netProfitYTD < 0:
-                            ctChargeYTD = 0
-                        elif netProfitYTD < 50000:
-                            ctChargeYTD = netProfitYTD * taxRateUpTo50K
-                        else:
-                            ctChargeYTD = netProfitYTD * taxRateAbove50K
-                        # Get Month'YY from cell A8
-                        monthYear = ws.cell(row=8, column=1).value
+                        
+                        # Calculate CT charges
+                        def calculate_ct_charge(profit):
+                            if profit < 0:
+                                return 0
+                            elif profit < 50000:
+                                return profit * taxRateUpTo50K
+                            else:
+                                return profit * taxRateAbove50K
+                        
+                        ctChargeMonthly = calculate_ct_charge(netProfit)
+                        ctChargeYTD = calculate_ct_charge(netProfitYTD)
+                        
+                        # Format month/year from cell A8
+                        monthYear = processor.ws.cell(row=8, column=1).value
                         try:
                             monthYear_fmt = pd.to_datetime(monthYear).strftime("%b'%y")
                         except Exception:
                             monthYear_fmt = str(monthYear)
-                        # Place headers starting from row 15
-                        ws.cell(row=15, column=7).value = ""
-                        ws.cell(row=15, column=8).value = monthYear_fmt
-                        ws.cell(row=15, column=9).value = "YTD"
-                        ws.cell(row=16, column=7).value = "Net profit before tax"
-                        ws.cell(row=16, column=8).value = netProfitBeforeTax
-                        ws.cell(row=16, column=9).value = netProfitBeforeTaxYTD
-                        ws.cell(row=17, column=7).value = ""
-                        ws.cell(row=17, column=8).value = ""
-                        ws.cell(row=17, column=9).value = ""
-                        ws.cell(row=18, column=7).value = "Depreciation"
-                        ws.cell(row=18, column=8).value = depreciation
-                        ws.cell(row=18, column=9).value = depreciationYTD
-                        ws.cell(row=19, column=7).value = ""
-                        ws.cell(row=19, column=8).value = ""
-                        ws.cell(row=19, column=9).value = ""
-                        ws.cell(row=20, column=7).value = "Net profit"
-                        ws.cell(row=20, column=8).value = netProfit
-                        ws.cell(row=20, column=9).value = netProfitYTD
-                        ws.cell(row=21, column=7).value = ""
-                        ws.cell(row=21, column=8).value = ""
-                        ws.cell(row=21, column=9).value = ""
-                        ws.cell(row=22, column=7).value = "Tax rate up to 50K profit"
-                        ws.cell(row=22, column=8).value = taxRateUpTo50K
-                        ws.cell(row=22, column=9).value = taxRateUpTo50K
-                        ws.cell(row=23, column=7).value = "Tax rate above 50K profit"
-                        ws.cell(row=23, column=8).value = taxRateAbove50K
-                        ws.cell(row=23, column=9).value = taxRateAbove50K
-                        ws.cell(row=24, column=7).value = ""
-                        ws.cell(row=24, column=8).value = ""
-                        ws.cell(row=24, column=9).value = ""
-                        ws.cell(row=25, column=7).value = "CT charge"
-                        ws.cell(row=25, column=8).value = ctChargeMonthly
-                        ws.cell(row=25, column=9).value = ctChargeYTD
-                        ws.cell(row=26, column=7).value = ""
-                        ws.cell(row=26, column=8).value = ""
-                        ws.cell(row=26, column=9).value = ""
-                        ws.cell(row=27, column=7).value = "Total CT"
-                        ws.cell(row=27, column=8).value = ctChargeMonthly
-                        ws.cell(row=27, column=9).value = ctChargeYTD
-                        # Bold row 15
-                        for col in range(7, 10):
-                            ws.cell(row=15, column=col).font = openpyxl.styles.Font(bold=True)
+                        
+                        # Create tax calculation table (columns G-I, starting row 15)
+                        tax_data = [
+                            ("", monthYear_fmt, "YTD"),
+                            ("Net profit before tax", netProfitBeforeTax, netProfitBeforeTaxYTD),
+                            ("", "", ""),
+                            ("Depreciation", depreciation, depreciationYTD),
+                            ("", "", ""),
+                            ("Net profit", netProfit, netProfitYTD),
+                            ("", "", ""),
+                            ("Tax rate up to 50K profit", taxRateUpTo50K, taxRateUpTo50K),
+                            ("Tax rate above 50K profit", taxRateAbove50K, taxRateAbove50K),
+                            ("", "", ""),
+                            ("CT charge", ctChargeMonthly, ctChargeYTD),
+                            ("", "", ""),
+                            ("Total CT", ctChargeMonthly, ctChargeYTD)
+                        ]
+                        
+                        # Fill tax calculation table
+                        for i, (label, monthly, ytd) in enumerate(tax_data):
+                            row_num = 15 + i
+                            processor.ws.cell(row=row_num, column=7).value = label
+                            processor.ws.cell(row=row_num, column=8).value = monthly
+                            processor.ws.cell(row=row_num, column=9).value = ytd
+                            
+                            # Bold the header row
+                            if i == 0:
+                                for col in range(7, 10):
+                                    processor.ws.cell(row=row_num, column=col).font = openpyxl.styles.Font(bold=True)
+                    
                     # Apply summary table formatting
-                    format_summary_table(ws, start_row=15)
+                    format_summary_table(processor.ws, start_row=15)
                 # --- Format6 ---
                 elif fmt == 'format6':
-                    ws = target_sheet
-                    wsTrans = wb["Account Transactions"]
-                    accountName = ws.cell(row=4, column=1).value
-                    summaryRow = 15
-                    lastRow = wsTrans.max_row
-                    currentRow = 1
+                    processor = FormatProcessorBase(target_sheet, wb["Account Transactions"])
+                    
+                    # Find account row
+                    accountRow = processor.find_account_row()
+                    if accountRow is None:
+                        print(f"Account not found for Format6: {processor.accountName}")
+                        continue
+                    
+                    # Get opening balance from column I (row after account header)
+                    openingBalance_raw = processor.wsTrans.cell(row=accountRow + 1, column=9).value
+                    openingBalance = safe_float(openingBalance_raw, f"format6 openingBalance row {accountRow + 1}")
+                    
+                    # Dictionary to store monthly data and running totals
                     monthDict = {}
-                    totalLiability = 0
-                    totalPayment = 0
-                    totalOutstanding = 0
-                    found = False
-                    while currentRow <= lastRow:
-                        if wsTrans.cell(row=currentRow, column=1).value == accountName:
-                            openingBalance = wsTrans.cell(row=currentRow + 1, column=9).value or 0
-                            currentRow = currentRow + 2
-                            # Process transactions
-                            while currentRow <= lastRow and wsTrans.cell(row=currentRow, column=1).value not in (None, "", "Closing Balance") and "Total" not in str(wsTrans.cell(row=currentRow, column=1).value):
-                                amountI = wsTrans.cell(row=currentRow, column=9).value or 0
-                                amountH = wsTrans.cell(row=currentRow, column=8).value or 0
-                                transactionDate = wsTrans.cell(row=currentRow, column=1).value
-                                # Extract monthKey
-                                if isinstance(transactionDate, datetime):
-                                    monthKey = transactionDate.strftime("%B %Y")
-                                elif transactionDate:
-                                    try:
-                                        dt = pd.to_datetime(transactionDate, errors='coerce')
-                                        if pd.notna(dt):
-                                            monthKey = dt.strftime("%B %Y")
-                                        else:
-                                            monthKey = str(transactionDate)[:7]
-                                    except Exception:
-                                        monthKey = str(transactionDate)[:7]
-                                else:
-                                    monthKey = ""
-                                if monthKey not in monthDict:
-                                    monthDict[monthKey] = {"totalI": 0, "totalH": 0}
-                                # Update monthly totals for liabilities based on Column C (excluding "HMRC")
-                                colC = wsTrans.cell(row=currentRow, column=3).value or ""
-                                if str(colC).upper() != "HMRC":
-                                    monthDict[monthKey]["totalI"] += amountI
-                                monthDict[monthKey]["totalH"] += amountH
-                                currentRow += 1
-                            # Output summary table headers
-                            ws.cell(row=summaryRow, column=1).value = "Description"
-                            ws.cell(row=summaryRow, column=2).value = "Liability"
-                            ws.cell(row=summaryRow, column=3).value = "Payment"
-                            ws.cell(row=summaryRow, column=4).value = "Difference"
-                            for col in range(1, 5):
-                                ws.cell(row=summaryRow, column=col).font = openpyxl.styles.Font(bold=True)
-                            summaryRow += 1
-                            # Opening balance row
-                            ws.cell(row=summaryRow, column=1).value = "Opening Balance"
-                            ws.cell(row=summaryRow, column=2).value = openingBalance
-                            ws.cell(row=summaryRow, column=4).value = openingBalance
-                            summaryRow += 1
-                            # Output each month's calculated values
-                            for monthKey in monthDict:
-                                liabilities = monthDict[monthKey]["totalI"]
-                                payment = monthDict[monthKey]["totalH"]
-                                difference = liabilities - payment
-                                ws.cell(row=summaryRow, column=1).value = monthKey
-                                ws.cell(row=summaryRow, column=2).value = liabilities
-                                ws.cell(row=summaryRow, column=3).value = payment
-                                ws.cell(row=summaryRow, column=4).value = difference
-                                totalLiability += liabilities
-                                totalPayment += payment
-                                summaryRow += 1
-                            # Add opening balance to total liabilities
-                            totalLiability += openingBalance
-                            # Write the Balance row
-                            totalOutstanding = totalLiability - totalPayment
-                            ws.cell(row=summaryRow, column=1).value = "Balance"
-                            ws.cell(row=summaryRow, column=2).value = totalLiability
-                            ws.cell(row=summaryRow, column=3).value = totalPayment
-                            ws.cell(row=summaryRow, column=4).value = totalOutstanding
-                            found = True
+                    
+                    # Process transactions starting from accountRow + 2
+                    for transactionRow in range(accountRow + 2, processor.wsTrans.max_row + 1):
+                        cell_value = processor.wsTrans.cell(row=transactionRow, column=1).value
+                        if (cell_value in (None, "", "Closing Balance") or 
+                            "Total" in str(cell_value)):
                             break
-                        currentRow += 1
+                        
+                        # Extract transaction amounts
+                        amountI_raw = processor.wsTrans.cell(row=transactionRow, column=9).value
+                        amountH_raw = processor.wsTrans.cell(row=transactionRow, column=8).value
+                        amountI = safe_float(amountI_raw, f"format6 amountI row {transactionRow}")
+                        amountH = safe_float(amountH_raw, f"format6 amountH row {transactionRow}")
+                        
+                        # Extract transaction date and get month key
+                        transactionDate = processor.wsTrans.cell(row=transactionRow, column=1).value
+                        monthKey = extract_month_key(transactionDate)
+                        
+                        # Initialize month entry if not exists
+                        if monthKey not in monthDict:
+                            monthDict[monthKey] = {"totalI": 0, "totalH": 0}
+                        
+                        # Update monthly totals for liabilities based on Column C (excluding "HMRC")
+                        colC = str(processor.wsTrans.cell(row=transactionRow, column=3).value or "")
+                        if colC.upper() != "HMRC":
+                            monthDict[monthKey]["totalI"] += amountI
+                        monthDict[monthKey]["totalH"] += amountH
+                    
+                    # Setup summary table headers
+                    headers = ["Description", "Liability", "Payment", "Difference"]
+                    summaryStartRow = processor.setup_summary_headers(headers, 15)
+                    
+                    # Write opening balance row
+                    processor.ws.cell(row=summaryStartRow, column=1).value = "Opening Balance"
+                    processor.ws.cell(row=summaryStartRow, column=2).value = openingBalance
+                    processor.ws.cell(row=summaryStartRow, column=4).value = openingBalance
+                    current_row = summaryStartRow + 1
+                    
+                    # Initialize running totals
+                    totalLiability = openingBalance
+                    totalPayment = 0
+                    
+                    # Output each month's calculated values
+                    for monthKey in monthDict:
+                        liabilities = monthDict[monthKey]["totalI"]
+                        payment = monthDict[monthKey]["totalH"]
+                        difference = liabilities - payment
+                        
+                        processor.ws.cell(row=current_row, column=1).value = monthKey
+                        processor.ws.cell(row=current_row, column=2).value = liabilities
+                        processor.ws.cell(row=current_row, column=3).value = payment
+                        processor.ws.cell(row=current_row, column=4).value = difference
+                        
+                        totalLiability += liabilities
+                        totalPayment += payment
+                        current_row += 1
+                    
+                    # Write the Balance row
+                    totalOutstanding = totalLiability - totalPayment
+                    processor.ws.cell(row=current_row, column=1).value = "Balance"
+                    processor.ws.cell(row=current_row, column=2).value = totalLiability
+                    processor.ws.cell(row=current_row, column=3).value = totalPayment
+                    processor.ws.cell(row=current_row, column=4).value = totalOutstanding
+                    
                     # Apply summary table formatting
-                    format_summary_table(ws, start_row=15)
+                    format_summary_table(processor.ws, start_row=15)
                 # --- Format7 ---
                 elif fmt == 'format7':
-                    ws = target_sheet
-                    wsTrans = wb["Account Transactions"]
-                    accountName = ws.cell(row=4, column=1).value
-                    summaryRow = 15
-                    lastRow = wsTrans.max_row
-                    currentRow = 1
+                    processor = FormatProcessorBase(target_sheet, wb["Account Transactions"])
+                    
+                    # Find account row
+                    accountRow = processor.find_account_row()
+                    if accountRow is None:
+                        print(f"Account not found for Format7: {processor.accountName}")
+                        continue
+                    
+                    # Get opening balance from column I (row after account header)
+                    openingBalance_raw = processor.wsTrans.cell(row=accountRow + 1, column=9).value
+                    openingBalance = safe_float(openingBalance_raw, f"format7 openingBalance row {accountRow + 1}")
+                    
+                    # Dictionary to store monthly liability and payment data
                     monthDict = {}
-                    found = False
-                    while currentRow <= lastRow:
-                        if wsTrans.cell(row=currentRow, column=1).value == accountName:
-                            openingBalance = wsTrans.cell(row=currentRow + 1, column=9).value or 0
-                            currentRow = currentRow + 2
-                            totalOutstanding = 0
-                            # Process transactions until a 'Total' or 'Closing Balance' is encountered
-                            while (currentRow <= lastRow and
-                                wsTrans.cell(row=currentRow, column=1).value not in (None, "", "Closing Balance") and
-                                not (str(wsTrans.cell(row=currentRow, column=1).value).startswith("Total"))):
-                                amountI = wsTrans.cell(row=currentRow, column=9).value or 0
-                                amountH = wsTrans.cell(row=currentRow, column=8).value or 0
-                                transactionDate = wsTrans.cell(row=currentRow, column=1).value
-                                # Extract monthKey
-                                if isinstance(transactionDate, datetime):
-                                    monthKey = transactionDate.strftime("%B %Y")
-                                elif transactionDate:
-                                    try:
-                                        dt = pd.to_datetime(transactionDate, errors='coerce')
-                                        if pd.notna(dt):
-                                            monthKey = dt.strftime("%B %Y")
-                                        else:
-                                            monthKey = str(transactionDate)[:7]
-                                    except Exception:
-                                        monthKey = str(transactionDate)[:7]
-                                else:
-                                    monthKey = ""
-                                if monthKey not in monthDict:
-                                    monthDict[monthKey] = {"liability": 0, "payment": 0}
-                                # Update monthly liabilities for 'Manual Journal' (Column B)
-                                colB = wsTrans.cell(row=currentRow, column=2).value or ""
-                                if str(colB) == "Manual Journal":
-                                    monthDict[monthKey]["liability"] += amountI - amountH
-                                # Add to payment if Column B is 'Spend Money'
-                                if str(colB) == "Spend Money":
-                                    monthDict[monthKey]["payment"] += amountH
-                                currentRow += 1
-                            # Output summary table headers
-                            ws.cell(row=summaryRow, column=1).value = "Month"
-                            ws.cell(row=summaryRow, column=2).value = "Liability"
-                            ws.cell(row=summaryRow, column=3).value = "Payment"
-                            ws.cell(row=summaryRow, column=4).value = "Outstanding"
-                            for col in range(1, 5):
-                                ws.cell(row=summaryRow, column=col).font = openpyxl.styles.Font(bold=True)
-                            summaryRow += 1
-                            # Opening balance row
-                            ws.cell(row=summaryRow, column=1).value = "Opening Balance"
-                            ws.cell(row=summaryRow, column=2).value = openingBalance
-                            ws.cell(row=summaryRow, column=4).value = openingBalance
-                            summaryRow += 1
-                            # Output each month's calculated values
-                            for monthKey in monthDict:
-                                liabilities = monthDict[monthKey]["liability"]
-                                payment = monthDict[monthKey]["payment"]
-                                outstanding = liabilities - payment
-                                ws.cell(row=summaryRow, column=1).value = monthKey
-                                ws.cell(row=summaryRow, column=2).value = liabilities
-                                ws.cell(row=summaryRow, column=3).value = payment
-                                # Display Outstanding only if nonzero, else leave blank
-                                if outstanding != 0:
-                                    ws.cell(row=summaryRow, column=4).value = outstanding
-                                else:
-                                    ws.cell(row=summaryRow, column=4).value = None
-                                summaryRow += 1
-                            # Calculate the total outstanding from the monthly entries including opening balance
-                            totalOutstanding = openingBalance
-                            for monthKey in monthDict:
-                                totalOutstanding += monthDict[monthKey]["liability"] - monthDict[monthKey]["payment"]
-                            ws.cell(row=summaryRow, column=1).value = "Outstanding Total"
-                            ws.cell(row=summaryRow, column=4).value = totalOutstanding
-                            found = True
+                    
+                    # Process transactions starting from accountRow + 2
+                    for transactionRow in range(accountRow + 2, processor.wsTrans.max_row + 1):
+                        cell_value = processor.wsTrans.cell(row=transactionRow, column=1).value
+                        if (cell_value in (None, "", "Closing Balance") or 
+                            str(cell_value).startswith("Total")):
                             break
-                        currentRow += 1
-                    if not found:
-                        print(f"Account not found for Format7: {accountName}")
+                        
+                        # Extract transaction amounts
+                        amountI_raw = processor.wsTrans.cell(row=transactionRow, column=9).value
+                        amountH_raw = processor.wsTrans.cell(row=transactionRow, column=8).value
+                        amountI = safe_float(amountI_raw, f"format7 amountI row {transactionRow}")
+                        amountH = safe_float(amountH_raw, f"format7 amountH row {transactionRow}")
+                        
+                        # Extract transaction date and get month key
+                        transactionDate = processor.wsTrans.cell(row=transactionRow, column=1).value
+                        monthKey = extract_month_key(transactionDate)
+                        
+                        # Initialize month entry if not exists
+                        if monthKey not in monthDict:
+                            monthDict[monthKey] = {"liability": 0, "payment": 0}
+                        
+                        # Get transaction type from column B
+                        colB = str(processor.wsTrans.cell(row=transactionRow, column=2).value or "")
+                        
+                        # Categorize transaction by type
+                        if colB == "Manual Journal":
+                            monthDict[monthKey]["liability"] += amountI - amountH
+                        elif colB == "Spend Money":
+                            monthDict[monthKey]["payment"] += amountH
+                    
+                    # Setup summary table headers
+                    headers = ["Month", "Liability", "Payment", "Outstanding"]
+                    summaryStartRow = processor.setup_summary_headers(headers, 15)
+                    
+                    # Write opening balance row
+                    processor.ws.cell(row=summaryStartRow, column=1).value = "Opening Balance"
+                    processor.ws.cell(row=summaryStartRow, column=2).value = openingBalance
+                    processor.ws.cell(row=summaryStartRow, column=4).value = openingBalance
+                    current_row = summaryStartRow + 1
+                    
+                    # Output each month's calculated values
+                    totalOutstanding = openingBalance
+                    for monthKey in monthDict:
+                        liabilities = monthDict[monthKey]["liability"]
+                        payment = monthDict[monthKey]["payment"]
+                        outstanding = liabilities - payment
+                        
+                        processor.ws.cell(row=current_row, column=1).value = monthKey
+                        processor.ws.cell(row=current_row, column=2).value = liabilities
+                        processor.ws.cell(row=current_row, column=3).value = payment
+                        
+                        # Display Outstanding only if nonzero, else leave blank
+                        if outstanding != 0:
+                            processor.ws.cell(row=current_row, column=4).value = outstanding
+                        else:
+                            processor.ws.cell(row=current_row, column=4).value = None
+                        
+                        totalOutstanding += outstanding
+                        current_row += 1
+                    
+                    # Add outstanding total row
+                    processor.ws.cell(row=current_row, column=1).value = "Outstanding Total"
+                    processor.ws.cell(row=current_row, column=4).value = totalOutstanding
+                    
                     # Apply summary table formatting
-                    format_summary_table(ws, start_row=15)
+                    format_summary_table(processor.ws, start_row=15)
                 # --- Format8 ---
                 elif fmt == 'format8':
-                    ws = target_sheet
-                    wsTrans = wb["Account Transactions"]
-                    accountName = ws.cell(row=4, column=1).value
-                    summaryRow = 15
-                    lastRow = wsTrans.max_row
-                    currentRow = 1
+                    processor = FormatProcessorBase(target_sheet, wb["Account Transactions"])
+                    
+                    # Find account row
+                    accountRow = processor.find_account_row()
+                    if accountRow is None:
+                        print(f"Account not found for Format8: {processor.accountName}")
+                        continue
+                    
+                    # Get opening balance from column H (row after account header)
+                    openingBalance_raw = processor.wsTrans.cell(row=accountRow + 1, column=8).value
+                    openingBalance = safe_float(openingBalance_raw, f"format8 openingBalance row {accountRow + 1}")
+                    closingBalance = openingBalance
+                    
+                    # Dictionary to store monthly breakdowns
                     monthDict = {}
-                    found = False
-                    while currentRow <= lastRow:
-                        if wsTrans.cell(row=currentRow, column=1).value == accountName:
-                            # Opening balance from column 8 (H)
-                            openingBalance = wsTrans.cell(row=currentRow + 1, column=8).value or 0
-                            closingBalance = openingBalance
-                            currentRow = currentRow + 2
-                            # Process transactions until "Total PAYE" or "Closing Balance" is encountered
-                            while (currentRow <= lastRow and
-                                wsTrans.cell(row=currentRow, column=1).value not in (None, "", "Total PAYE", "Closing Balance")):
-                                amountI = wsTrans.cell(row=currentRow, column=9).value or 0
-                                amountH = wsTrans.cell(row=currentRow, column=8).value or 0
-                                transactionDate = wsTrans.cell(row=currentRow, column=1).value
-                                # Extract monthKey
-                                if isinstance(transactionDate, datetime):
-                                    monthKey = transactionDate.strftime("%B %Y")
-                                elif transactionDate:
-                                    try:
-                                        dt = pd.to_datetime(transactionDate, errors='coerce')
-                                        if pd.notna(dt):
-                                            monthKey = dt.strftime("%B %Y")
-                                        else:
-                                            monthKey = str(transactionDate)[:7]
-                                    except Exception:
-                                        monthKey = str(transactionDate)[:7]
-                                else:
-                                    monthKey = ""
-                                if monthKey not in monthDict:
-                                    monthDict[monthKey] = {"receipts": 0, "payments": 0, "pdqDeposits": 0}
-                                colB = str(wsTrans.cell(row=currentRow, column=2).value or "").upper()
-                                # Receipts: 'RECEIVE MONEY' (Column H)
-                                if colB == "RECEIVE MONEY":
-                                    monthDict[monthKey]["receipts"] += amountH
-                                # Payments: 'SPEND MONEY', 'PAYABLE PAYMENT', 'PAYABLE OVERPAYMENT' (Column I)
-                                if colB in ("SPEND MONEY", "PAYABLE PAYMENT", "PAYABLE OVERPAYMENT"):
-                                    monthDict[monthKey]["payments"] += amountI
-                                # PDQ/Deposits: 'BANK TRANSFER' (I-H)
-                                if colB == "BANK TRANSFER":
-                                    monthDict[monthKey]["pdqDeposits"] += (amountI - amountH)
-                                currentRow += 1
-                            # Output summary table headers
-                            ws.cell(row=summaryRow, column=1).value = "Month"
-                            ws.cell(row=summaryRow, column=2).value = "Op Bal"
-                            ws.cell(row=summaryRow, column=3).value = "Receipts"
-                            ws.cell(row=summaryRow, column=4).value = "Payments"
-                            ws.cell(row=summaryRow, column=5).value = "PDQ / Deposits"
-                            ws.cell(row=summaryRow, column=6).value = "Clo Bal"
-                            for col in range(1, 7):
-                                ws.cell(row=summaryRow, column=col).font = openpyxl.styles.Font(bold=True)
-                            summaryRow += 1
-                            # Write the opening balance row
-                            ws.cell(row=summaryRow, column=1).value = "Opening Balance"
-                            ws.cell(row=summaryRow, column=2).value = openingBalance
-                            summaryRow += 1
-                            # Output each month's calculated values
-                            for monthKey in monthDict:
-                                receipts = monthDict[monthKey]["receipts"]
-                                payments = monthDict[monthKey]["payments"]
-                                pdqDeposits = monthDict[monthKey]["pdqDeposits"]
-                                closingBalance = closingBalance + receipts - payments - pdqDeposits
-                                ws.cell(row=summaryRow, column=1).value = monthKey
-                                ws.cell(row=summaryRow, column=2).value = openingBalance
-                                ws.cell(row=summaryRow, column=3).value = receipts
-                                ws.cell(row=summaryRow, column=4).value = payments
-                                ws.cell(row=summaryRow, column=5).value = pdqDeposits
-                                ws.cell(row=summaryRow, column=6).value = closingBalance
-                                # Update opening balance for next month
-                                openingBalance = closingBalance
-                                summaryRow += 1
-                            found = True
+                    
+                    # Process transactions starting from accountRow + 2
+                    for transactionRow in range(accountRow + 2, processor.wsTrans.max_row + 1):
+                        cell_value = processor.wsTrans.cell(row=transactionRow, column=1).value
+                        if cell_value in (None, "", "Total PAYE", "Closing Balance"):
                             break
-                        currentRow += 1
-                    if not found:
-                        print(f"Account not found for Format8: {accountName}")
+                        
+                        # Extract transaction amounts
+                        amountI_raw = processor.wsTrans.cell(row=transactionRow, column=9).value
+                        amountH_raw = processor.wsTrans.cell(row=transactionRow, column=8).value
+                        amountI = safe_float(amountI_raw, f"format8 amountI row {transactionRow}")
+                        amountH = safe_float(amountH_raw, f"format8 amountH row {transactionRow}")
+                        
+                        # Extract transaction date and get month key
+                        transactionDate = processor.wsTrans.cell(row=transactionRow, column=1).value
+                        monthKey = extract_month_key(transactionDate)
+                        
+                        # Initialize month entry if not exists
+                        if monthKey not in monthDict:
+                            monthDict[monthKey] = {"receipts": 0, "payments": 0, "pdqDeposits": 0}
+                        
+                        # Get transaction type from column B
+                        colB = str(processor.wsTrans.cell(row=transactionRow, column=2).value or "").upper()
+                        
+                        # Categorize transaction by type
+                        if colB == "RECEIVE MONEY":
+                            monthDict[monthKey]["receipts"] += amountH
+                        elif colB in ("SPEND MONEY", "PAYABLE PAYMENT", "PAYABLE OVERPAYMENT"):
+                            monthDict[monthKey]["payments"] += amountI
+                        elif colB == "BANK TRANSFER":
+                            monthDict[monthKey]["pdqDeposits"] += (amountI - amountH)
+                    
+                    # Setup summary table headers
+                    headers = ["Month", "Op Bal", "Receipts", "Payments", "PDQ / Deposits", "Clo Bal"]
+                    summaryStartRow = processor.setup_summary_headers(headers, 15)
+                    
+                    # Write opening balance row
+                    processor.ws.cell(row=summaryStartRow, column=1).value = "Opening Balance"
+                    processor.ws.cell(row=summaryStartRow, column=2).value = openingBalance
+                    current_row = summaryStartRow + 1
+                    
+                    # Output each month's calculated values
+                    for monthKey in monthDict:
+                        receipts = monthDict[monthKey]["receipts"]
+                        payments = monthDict[monthKey]["payments"]
+                        pdqDeposits = monthDict[monthKey]["pdqDeposits"]
+                        closingBalance = closingBalance + receipts - payments - pdqDeposits
+                        
+                        processor.ws.cell(row=current_row, column=1).value = monthKey
+                        processor.ws.cell(row=current_row, column=2).value = openingBalance
+                        processor.ws.cell(row=current_row, column=3).value = receipts
+                        processor.ws.cell(row=current_row, column=4).value = payments
+                        processor.ws.cell(row=current_row, column=5).value = pdqDeposits
+                        processor.ws.cell(row=current_row, column=6).value = closingBalance
+                        
+                        # Update opening balance for next month
+                        openingBalance = closingBalance
+                        current_row += 1
+                    
                     # Apply summary table formatting
-                    format_summary_table(ws, start_row=15)
+                    format_summary_table(processor.ws, start_row=15)
                 # --- Format9 ---
                 elif fmt == 'format9':
-                    ws = target_sheet
-                    wsTrans = wb["Account Transactions"]
+                    processor = FormatProcessorBase(target_sheet, wb["Account Transactions"])
+                    
                     # Get the period end date from cell A8
-                    periodEndDate = ws.cell(row=8, column=1).value
-                    # Validate date
+                    periodEndDate = processor.ws.cell(row=8, column=1).value
                     try:
                         periodEndDate_dt = pd.to_datetime(periodEndDate, errors='raise')
                     except Exception:
                         print(f"Invalid date in A8 for Format9: {periodEndDate}")
                         continue
-                    # Get the account head from A4
-                    accountName = ws.cell(row=4, column=1).value
-                    foundMatch = False
-                    accountRow = None
-                    for rowIndex in range(1, wsTrans.max_row + 1):
-                        if wsTrans.cell(row=rowIndex, column=1).value == accountName:
-                            foundMatch = True
-                            accountRow = rowIndex
-                            break
-                    if not foundMatch:
-                        print(f"Account head not found for Format9: {accountName}")
+                    
+                    # Find account and calculate balances
+                    accountRow = processor.find_account_row()
+                    if accountRow is None:
+                        print(f"Account head not found for Format9: {processor.accountName}")
                         continue
-                    # Move to the next row after the account header
-                    accountRow = accountRow + 1
-                    # Calculate the opening balance (H - I) with safe conversion
-                    val_h_raw = wsTrans.cell(row=accountRow, column=8).value
-                    val_i_raw = wsTrans.cell(row=accountRow, column=9).value
-                    openingBalance = safe_float(val_h_raw, f"format9 openingBalance col H row {accountRow}") - safe_float(val_i_raw, f"format9 openingBalance col I row {accountRow}")
+                    
+                    # Calculate opening balance (H - I) 
+                    openingBalance = processor.get_opening_balance(accountRow, "H_minus_I")
                     closingBalance = openingBalance
+                    
                     # Loop through transactions to calculate the closing balance
-                    for transactionRow in range(accountRow + 1, wsTrans.max_row + 1):
-                        val = wsTrans.cell(row=transactionRow, column=1).value
+                    for transactionRow in range(accountRow + 2, processor.wsTrans.max_row + 1):
+                        val = processor.wsTrans.cell(row=transactionRow, column=1).value
                         if val is not None and ("Total" in str(val) or "Closing Balance" in str(val)):
                             break
-                        creditVal_raw = wsTrans.cell(row=transactionRow, column=8).value
-                        debitVal_raw = wsTrans.cell(row=transactionRow, column=9).value
+                        creditVal_raw = processor.wsTrans.cell(row=transactionRow, column=8).value
+                        debitVal_raw = processor.wsTrans.cell(row=transactionRow, column=9).value
                         creditVal = safe_float(creditVal_raw, f"format9 creditVal row {transactionRow}")
                         debitVal = safe_float(debitVal_raw, f"format9 debitVal row {transactionRow}")
                         closingBalance = closingBalance + (creditVal - debitVal)
-                    # Start populating the summary table from row 15
-                    summaryStartRow = 15
-                    ws.cell(row=summaryStartRow, column=1).value = "Date"
-                    ws.cell(row=summaryStartRow, column=2).value = "Details"
-                    ws.cell(row=summaryStartRow, column=3).value = "Amount £"
-                    for col in range(1, 4):
-                        ws.cell(row=summaryStartRow, column=col).font = openpyxl.styles.Font(bold=True)
-                    summaryStartRow += 1
-                    # Fill in the summary table with blank row
-                    ws.cell(row=summaryStartRow, column=1).value = periodEndDate
-                    ws.cell(row=summaryStartRow, column=2).value = "Balance as per statement"
-                    ws.cell(row=summaryStartRow, column=3).value = ""
-                    summaryStartRow += 1
-                    # Add blank row
-                    ws.cell(row=summaryStartRow, column=1).value = ""
-                    ws.cell(row=summaryStartRow, column=2).value = ""
-                    ws.cell(row=summaryStartRow, column=3).value = ""
-                    summaryStartRow += 1
-                    ws.cell(row=summaryStartRow, column=1).value = periodEndDate
-                    ws.cell(row=summaryStartRow, column=2).value = "Balance per Control account"
-                    ws.cell(row=summaryStartRow, column=3).value = closingBalance
-                    ws.cell(row=summaryStartRow, column=3).number_format = "#,##0.00"
-                    # Apply summary table formatting
-                    format_summary_table(ws, start_row=15)
+                    
+                    # Setup summary table
+                    headers = ["Date", "Details", "Amount £"]
+                    summaryStartRow = processor.setup_summary_headers(headers, 15)
+                    
+                    # Fill in summary data
+                    processor.ws.cell(row=summaryStartRow, column=1).value = periodEndDate
+                    processor.ws.cell(row=summaryStartRow, column=2).value = "Balance as per statement"
+                    processor.ws.cell(row=summaryStartRow, column=3).value = ""
+                    summaryStartRow += 2  # Skip blank row
+                    
+                    processor.ws.cell(row=summaryStartRow, column=1).value = periodEndDate
+                    processor.ws.cell(row=summaryStartRow, column=2).value = "Balance per Control account"
+                    processor.ws.cell(row=summaryStartRow, column=3).value = closingBalance
+                    processor.ws.cell(row=summaryStartRow, column=3).number_format = "#,##0.00"
+                    
+                    # Apply formatting
+                    format_summary_table(processor.ws, start_row=15)
                 # --- Format10 ---
                 elif fmt == 'format10':
-                    ws = target_sheet
-                    wsTrans = wb["Account Transactions"]
+                    processor = FormatProcessorBase(target_sheet, wb["Account Transactions"])
+                    
                     # Get the period end date from cell A8
-                    periodEndDate = ws.cell(row=8, column=1).value
-                    # Validate date
+                    periodEndDate = processor.ws.cell(row=8, column=1).value
                     try:
                         periodEndDate_dt = pd.to_datetime(periodEndDate, errors='raise')
                     except Exception:
                         print(f"Invalid date in A8 for Format10: {periodEndDate}")
                         continue
-                    # Get the account head from A4
-                    accountName = ws.cell(row=4, column=1).value
-                    foundMatch = False
-                    accountRow = None
-                    for rowIndex in range(1, wsTrans.max_row + 1):
-                        if wsTrans.cell(row=rowIndex, column=1).value == accountName:
-                            foundMatch = True
-                            accountRow = rowIndex
-                            break
-                    if not foundMatch:
-                        print(f"Account head not found for Format10: {accountName}")
+                    
+                    # Find account and calculate balances
+                    accountRow = processor.find_account_row()
+                    if accountRow is None:
+                        print(f"Account head not found for Format10: {processor.accountName}")
                         continue
-                    # Move to the next row after the account header
-                    accountRow = accountRow + 1
-                    # Calculate the opening balance (I - H) with safe conversion
-                    val_i_raw = wsTrans.cell(row=accountRow, column=9).value
-                    val_h_raw = wsTrans.cell(row=accountRow, column=8).value
-                    openingBalance = safe_float(val_i_raw, f"format10 openingBalance col I row {accountRow}") - safe_float(val_h_raw, f"format10 openingBalance col H row {accountRow}")
+                    
+                    # Calculate opening balance (I - H)
+                    openingBalance = processor.get_opening_balance(accountRow, "I_minus_H")
                     closingBalance = openingBalance
+                    
                     # Loop through transactions to calculate the closing balance
-                    for transactionRow in range(accountRow + 1, wsTrans.max_row + 1):
-                        val = wsTrans.cell(row=transactionRow, column=1).value
+                    for transactionRow in range(accountRow + 2, processor.wsTrans.max_row + 1):
+                        val = processor.wsTrans.cell(row=transactionRow, column=1).value
                         if val is not None and ("Total" in str(val) or "Closing Balance" in str(val)):
                             break
-                        debitVal_raw = wsTrans.cell(row=transactionRow, column=9).value
-                        creditVal_raw = wsTrans.cell(row=transactionRow, column=8).value
+                        debitVal_raw = processor.wsTrans.cell(row=transactionRow, column=9).value
+                        creditVal_raw = processor.wsTrans.cell(row=transactionRow, column=8).value
                         debitVal = safe_float(debitVal_raw, f"format10 debitVal row {transactionRow}")
                         creditVal = safe_float(creditVal_raw, f"format10 creditVal row {transactionRow}")
                         closingBalance = closingBalance + (debitVal - creditVal)
-                    # Populate summary table
-                    ws.cell(row=13, column=1).value = "Reconciliation"
-                    ws.cell(row=13, column=1).font = openpyxl.styles.Font(bold=True, size=14)
-                    ws.cell(row=15, column=1).value = "Date"
-                    ws.cell(row=15, column=2).value = "£"
-                    ws.cell(row=15, column=3).value = "Particular"
-                    for col in range(1, 4):
-                        ws.cell(row=15, column=col).font = openpyxl.styles.Font(bold=True)
-                    ws.cell(row=16, column=1).value = periodEndDate
-                    ws.cell(row=16, column=2).value = ""  # Manual input placeholder
-                    ws.cell(row=16, column=3).value = "Balance as per "
-                    ws.cell(row=17, column=1).value = periodEndDate
-                    ws.cell(row=17, column=2).value = closingBalance
-                    ws.cell(row=17, column=3).value = "Balance as per "
-                    ws.cell(row=18, column=1).value = periodEndDate
-                    # Set formula for difference (B16-B17)
-                    ws.cell(row=18, column=2).value = f"=B16-B17"
-                    ws.cell(row=18, column=3).value = "Difference"
-                    # Apply accounting format to amount column (column 2)
-                    for r in range(16, 19):
-                        ws.cell(row=r, column=2).number_format = "#,##0.00"
-                    # Apply summary table formatting
-                    format_summary_table(ws, start_row=15)
+                    
+                    # Setup reconciliation header
+                    processor.ws.cell(row=13, column=1).value = "Reconciliation"
+                    processor.ws.cell(row=13, column=1).font = openpyxl.styles.Font(bold=True, size=14)
+                    
+                    # Setup summary table headers
+                    headers = ["Date", "£", "Particular"]
+                    summaryStartRow = processor.setup_summary_headers(headers, 15)
+                    
+                    # Fill in reconciliation data
+                    processor.ws.cell(row=summaryStartRow, column=1).value = periodEndDate
+                    processor.ws.cell(row=summaryStartRow, column=2).value = ""  # Manual input placeholder
+                    processor.ws.cell(row=summaryStartRow, column=3).value = "Balance as per "
+                    
+                    processor.ws.cell(row=summaryStartRow + 1, column=1).value = periodEndDate
+                    processor.ws.cell(row=summaryStartRow + 1, column=2).value = closingBalance
+                    processor.ws.cell(row=summaryStartRow + 1, column=3).value = "Balance as per "
+                    
+                    processor.ws.cell(row=summaryStartRow + 2, column=1).value = periodEndDate
+                    processor.ws.cell(row=summaryStartRow + 2, column=2).value = f"=B{summaryStartRow}-B{summaryStartRow + 1}"
+                    processor.ws.cell(row=summaryStartRow + 2, column=3).value = "Difference"
+                    
+                    # Apply accounting format to amount column
+                    for r in range(summaryStartRow, summaryStartRow + 3):
+                        processor.ws.cell(row=r, column=2).number_format = "#,##0.00"
+                    
+                    # Apply formatting
+                    format_summary_table(processor.ws, start_row=15)
 
 
 
@@ -1168,7 +1215,7 @@ def process_far_file(file_content):
         # Remove gridlines from FAR sheet
         ws_far.sheet_view.showGridLines = False
         # Extract FAR data from the current workbook with fresh stream
-        df_raw = pd.read_excel(get_fresh_stream(), sheet_name='FAR', header=None, engine='openpyxl')
+        df_raw = pd.read_excel(create_fresh_stream(original_content), sheet_name='FAR', header=None, engine='openpyxl')
         static_headers = [
             'Purchase Date',
             'Details',
@@ -1226,7 +1273,7 @@ def process_far_file(file_content):
         if 'Account Transactions' in wb.sheetnames:
             ws_trans = wb['Account Transactions']
             # Read as DataFrame for easier processing with fresh stream
-            df_trans_raw = pd.read_excel(get_fresh_stream(), sheet_name='Account Transactions', header=None, engine='openpyxl')
+            df_trans_raw = pd.read_excel(create_fresh_stream(original_content), sheet_name='Account Transactions', header=None, engine='openpyxl')
             header_row_idx = 4  # Row 5 in Excel (0-based)
             headers = list(df_trans_raw.iloc[header_row_idx].fillna('').astype(str))
             header_map = {h.strip().lower(): i for i, h in enumerate(headers)}
