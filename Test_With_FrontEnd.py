@@ -134,18 +134,33 @@ def _month_sort_key(x):
 
 # Main Processing Function (full business logic from your Test.py)
 def process_far_file(file_content):
-
+    def safe_float(value, context="unknown"):
+        """
+        Safely convert a value to float, handling strings and None values.
+        Used to prevent string subtraction errors in Excel cell operations.
+        """
+        if value is None:
+            return 0.0
+        
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return 0.0
     
-    # Create reusable streams from same content
-    excel_for_pandas = BytesIO(file_content)
-    excel_for_openpyxl = BytesIO(file_content)
-
-    df = pd.read_excel(excel_for_pandas, sheet_name='FAR', engine='openpyxl')
-    wb = openpyxl.load_workbook(excel_for_openpyxl)
+    # Store original content for multiple uses - avoid stream closure issues
+    original_content = file_content
+    
+    # Helper function to create fresh streams as needed
+    def get_fresh_stream():
+        return BytesIO(original_content)
+    
+    # Load Excel data with fresh streams and data_only=True to avoid image issues
+    df = pd.read_excel(get_fresh_stream(), sheet_name='FAR', engine='openpyxl')
+    wb = openpyxl.load_workbook(get_fresh_stream(), data_only=True, read_only=False)
 
 
     # Extract year_end_date and period_end_date from FAR sheet
-    df_far_head = pd.read_excel(excel_for_pandas, sheet_name='FAR', header=None, nrows=5, engine='openpyxl')
+    df_far_head = pd.read_excel(get_fresh_stream(), sheet_name='FAR', header=None, nrows=5, engine='openpyxl')
     year_end_date, period_end_date = None, None
     for i in range(5):
         row_vals = df_far_head.iloc[i].astype(str).tolist()
@@ -193,9 +208,7 @@ def process_far_file(file_content):
     output_base_name = "uploaded_file"
     output_folder = tempfile.mkdtemp()
 
-    # 📘 Load workbook again if needed
-    excel_for_openpyxl.seek(0)
-    wb = openpyxl.load_workbook(excel_for_openpyxl)
+    # 📘 Workbook is already loaded above - no need to reload
 
 
     # --- MODULE 1: Split Account Transactions into separate sheets ---
@@ -1043,16 +1056,20 @@ def process_far_file(file_content):
                         continue
                     # Move to the next row after the account header
                     accountRow = accountRow + 1
-                    # Calculate the opening balance (H - I)
-                    openingBalance = (wsTrans.cell(row=accountRow, column=8).value or 0) - (wsTrans.cell(row=accountRow, column=9).value or 0)
+                    # Calculate the opening balance (H - I) with safe conversion
+                    val_h_raw = wsTrans.cell(row=accountRow, column=8).value
+                    val_i_raw = wsTrans.cell(row=accountRow, column=9).value
+                    openingBalance = safe_float(val_h_raw, f"format9 openingBalance col H row {accountRow}") - safe_float(val_i_raw, f"format9 openingBalance col I row {accountRow}")
                     closingBalance = openingBalance
                     # Loop through transactions to calculate the closing balance
                     for transactionRow in range(accountRow + 1, wsTrans.max_row + 1):
                         val = wsTrans.cell(row=transactionRow, column=1).value
                         if val is not None and ("Total" in str(val) or "Closing Balance" in str(val)):
                             break
-                        creditVal = wsTrans.cell(row=transactionRow, column=8).value or 0
-                        debitVal = wsTrans.cell(row=transactionRow, column=9).value or 0
+                        creditVal_raw = wsTrans.cell(row=transactionRow, column=8).value
+                        debitVal_raw = wsTrans.cell(row=transactionRow, column=9).value
+                        creditVal = safe_float(creditVal_raw, f"format9 creditVal row {transactionRow}")
+                        debitVal = safe_float(debitVal_raw, f"format9 debitVal row {transactionRow}")
                         closingBalance = closingBalance + (creditVal - debitVal)
                     # Start populating the summary table from row 15
                     summaryStartRow = 15
@@ -1104,15 +1121,21 @@ def process_far_file(file_content):
                         continue
                     # Move to the next row after the account header
                     accountRow = accountRow + 1
-                    # Calculate the opening balance (I - H)
-                    openingBalance = (wsTrans.cell(row=accountRow, column=9).value or 0) - (wsTrans.cell(row=accountRow, column=8).value or 0)
+                    # Calculate the opening balance (I - H) with safe conversion
+                    val_i_raw = wsTrans.cell(row=accountRow, column=9).value
+                    val_h_raw = wsTrans.cell(row=accountRow, column=8).value
+                    openingBalance = safe_float(val_i_raw, f"format10 openingBalance col I row {accountRow}") - safe_float(val_h_raw, f"format10 openingBalance col H row {accountRow}")
                     closingBalance = openingBalance
                     # Loop through transactions to calculate the closing balance
                     for transactionRow in range(accountRow + 1, wsTrans.max_row + 1):
                         val = wsTrans.cell(row=transactionRow, column=1).value
                         if val is not None and ("Total" in str(val) or "Closing Balance" in str(val)):
                             break
-                        closingBalance = closingBalance + ((wsTrans.cell(row=transactionRow, column=9).value or 0) - (wsTrans.cell(row=transactionRow, column=8).value or 0))
+                        debitVal_raw = wsTrans.cell(row=transactionRow, column=9).value
+                        creditVal_raw = wsTrans.cell(row=transactionRow, column=8).value
+                        debitVal = safe_float(debitVal_raw, f"format10 debitVal row {transactionRow}")
+                        creditVal = safe_float(creditVal_raw, f"format10 creditVal row {transactionRow}")
+                        closingBalance = closingBalance + (debitVal - creditVal)
                     # Populate summary table
                     ws.cell(row=13, column=1).value = "Reconciliation"
                     ws.cell(row=13, column=1).font = openpyxl.styles.Font(bold=True, size=14)
@@ -1144,8 +1167,8 @@ def process_far_file(file_content):
         ws_far = wb['FAR']
         # Remove gridlines from FAR sheet
         ws_far.sheet_view.showGridLines = False
-        # Extract FAR data from the current workbook
-        df_raw = pd.read_excel(excel_for_pandas, sheet_name='FAR', header=None, engine='openpyxl')
+        # Extract FAR data from the current workbook with fresh stream
+        df_raw = pd.read_excel(get_fresh_stream(), sheet_name='FAR', header=None, engine='openpyxl')
         static_headers = [
             'Purchase Date',
             'Details',
@@ -1202,8 +1225,8 @@ def process_far_file(file_content):
         # Read Account Transactions sheet from the same Excel as FAR
         if 'Account Transactions' in wb.sheetnames:
             ws_trans = wb['Account Transactions']
-            # Read as DataFrame for easier processing
-            df_trans_raw = pd.read_excel(excel_for_pandas, sheet_name='Account Transactions', header=None, engine='openpyxl')
+            # Read as DataFrame for easier processing with fresh stream
+            df_trans_raw = pd.read_excel(get_fresh_stream(), sheet_name='Account Transactions', header=None, engine='openpyxl')
             header_row_idx = 4  # Row 5 in Excel (0-based)
             headers = list(df_trans_raw.iloc[header_row_idx].fillna('').astype(str))
             header_map = {h.strip().lower(): i for i, h in enumerate(headers)}
@@ -1766,19 +1789,30 @@ def process_far_file(file_content):
     if ws_to_delete:
             print(f"Deleted sheets with 'No data found' in C8: {', '.join(ws_to_delete)}")
 
-        # 4. Save the modified workbook to output folder
+        # 4. Save the modified workbook to output folder and return
     safe_name = re.sub(r'[^A-Za-z0-9._-]', '_', str(output_base_name))
     far_output_name = f'{safe_name}.xlsx'
     output_path = os.path.join(output_folder, far_output_name)
+    
+    # Save to file path first
     wb.save(output_path)
     print(f"Done! Output saved to: {output_path}")
 
-
-    
+    # Create a fresh output buffer for return
     output = BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output
+    try:
+        # Create a new workbook instance from the saved file to avoid stream issues
+        with open(output_path, 'rb') as f:
+            output.write(f.read())
+        output.seek(0)
+        return output
+    except Exception as e:
+        print(f"⚠️ Warning: Error creating output buffer: {e}")
+        # Fallback: try to save the workbook directly to buffer
+        output.seek(0)
+        wb.save(output)
+        output.seek(0)
+        return output
 
 import streamlit as st
 
@@ -1870,9 +1904,9 @@ if uploaded_file is not None:
     excel_for_openpyxl = BytesIO(file_content)
     excel_for_pandas = BytesIO(file_content)
 
-    # ✅ Load workbook and data
+    # ✅ Load workbook and data with data_only=True to avoid image issues
     try:
-        wb = load_workbook(excel_for_openpyxl)
+        wb = load_workbook(excel_for_openpyxl, data_only=True)
         xls = pd.ExcelFile(excel_for_pandas, engine="openpyxl")
 
        # for sheet in xls.sheet_names:
