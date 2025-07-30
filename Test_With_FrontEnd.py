@@ -345,6 +345,10 @@ def process_far_file(file_content):
                     wsNew["A9"].value = None
                     wsNew["B9"].value = None
                     wsNew["C9"].value = None
+                    # Add Total row at row 10
+                    wsNew["A10"] = "Total"
+                    wsNew["B10"].value = None
+                    wsNew["C10"] = "=C8"  # Reference C8 to show same value as summary
                     border = openpyxl.styles.Border(
                         top=openpyxl.styles.Side(style='thin'),
                         bottom=openpyxl.styles.Side(style='thin')
@@ -352,6 +356,10 @@ def process_far_file(file_content):
                     for c in range(1, 4):
                         wsNew.cell(row=6, column=c).border = border
                         wsNew.cell(row=10, column=c).border = border
+                        # Make Total row bold
+                        wsNew.cell(row=10, column=c).font = openpyxl.styles.Font(name="Gill Sans MT", size=12, bold=True)
+                    # Apply number formatting to C10 to match C8
+                    wsNew["C10"].number_format = "#,##0.00;(#,##0.00)"
 
     # --- MODULE 2: Process Mappings sheet and apply FormatN logic ---
     if 'Mappings' in wb.sheetnames:
@@ -1475,7 +1483,7 @@ def process_far_file(file_content):
                 dep_rate2 = pd.to_numeric(row2['Depreciation Rate'], errors='coerce')
                 monthly_dep2 = (total_cost2 * dep_rate2 / 100) / 12 if total_cost2 and dep_rate2 else 0
                 for m in months:
-                    updated_table.iloc[idx2, updated_table.columns.get_loc(m)] = 0
+                    updated_table.at[idx2, m] = 0
                 total_dep_so_far2 = pd.to_numeric(updated_table.at[idx2, 'Accumulated Depreciation'], errors='coerce') if 'Accumulated Depreciation' in updated_table.columns else 0
                 for m in months:
                     try:
@@ -1487,16 +1495,16 @@ def process_far_file(file_content):
                         if (pdate2 <= m_dt + pd.offsets.MonthEnd(0)) and (m_dt <= mgmt_acct_month):
                             if total_dep_so_far2 < total_cost2:
                                 dep_this_month2 = min(monthly_dep2, total_cost2 - total_dep_so_far2)
-                                updated_table.iloc[idx2, updated_table.columns.get_loc(m)] = dep_this_month2
+                                updated_table.at[idx2, m] = dep_this_month2
                                 total_dep_so_far2 += dep_this_month2
                             else:
-                                updated_table.iloc[idx2, updated_table.columns.get_loc(m)] = 0
+                                updated_table.at[idx2, m] = 0
                         elif m_dt > mgmt_acct_month:
-                            updated_table.iloc[idx2, updated_table.columns.get_loc(m)] = ''
+                            updated_table.at[idx2, m] = ''
                         else:
-                            updated_table.iloc[idx2, updated_table.columns.get_loc(m)] = 0
+                            updated_table.at[idx2, m] = 0
                     else:
-                        updated_table.iloc[idx2, updated_table.columns.get_loc(m)] = ''
+                        updated_table.at[idx2, m] = ''
             dep_month_cols = months
             acc_dep_col_name = 'Accumulated Depreciation'
             total_cost_col_name = 'Total Cost'
