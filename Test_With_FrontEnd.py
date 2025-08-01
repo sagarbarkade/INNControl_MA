@@ -91,8 +91,8 @@ def extract_month_key(transaction_date, format_type="MMMM YYYY"):
         return ""
 
 def apply_tax_component_formatting(ws):
-    start_row, end_row = 15, 27
-    start_col, end_col = 7, 9  # G=7, H=8, I=9
+    start_row, end_row = 15, 26  # Reduced from 27 to 26 since we removed one row
+    start_col, end_col = 9, 11  # I=9, J=10, K=11 (shifted from G-I to I-K)
     bold_font = Font(name='Gill Sans MT', size=12, bold=True)
     regular_font = Font(name='Gill Sans MT', size=12, bold=False)
     center_align = Alignment(horizontal='center', vertical='center')
@@ -117,15 +117,15 @@ def apply_tax_component_formatting(ws):
             cell.alignment = right_align if col > start_col else left_align
             cell.border = thin_border
             cell.fill = PatternFill(fill_type=None)
-    for r in [22, 23]:
-        for c in [8, 9]:
-            cell = ws.cell(row=r, column=c)
-            cell.number_format = '0.00%'
-            cell.font = bold_font
-            cell.alignment = right_align
-    ws.column_dimensions['G'].width = 18
-    ws.column_dimensions['H'].width = 14
-    ws.column_dimensions['I'].width = 14
+    # Apply percentage formatting to the Corporation Tax rate row
+    for c in [10, 11]:  # Columns J and K
+        cell = ws.cell(row=22, column=c)
+        cell.number_format = '0.00%'
+        cell.font = bold_font
+        cell.alignment = right_align
+    ws.column_dimensions['I'].width = 18
+    ws.column_dimensions['J'].width = 14
+    ws.column_dimensions['K'].width = 14
 
 def format_summary_table(ws, start_row=15):
     start_col = 1
@@ -326,6 +326,10 @@ def process_far_file(file_content):
                         wsNew = wb[newSheetName]
                     else:
                         wsNew = wb.create_sheet(title=newSheetName)
+                    
+                    # Remove gridlines from the new sheet
+                    wsNew.sheet_view.showGridLines = False
+                    
                     # PART 1: ROWS 1-4
                     wsNew["A1"] = clientName
                     wsNew["A2"] = f"Year End - {year_end_date.strftime('%d %B %Y')}"
@@ -850,7 +854,7 @@ def process_far_file(file_content):
                         except Exception:
                             monthYear_fmt = str(monthYear)
                         
-                        # Create tax calculation table (columns G-I, starting row 15)
+                        # Create tax calculation table (columns I-K, starting row 15)
                         tax_data = [
                             ("", monthYear_fmt, "YTD"),
                             ("Net profit before tax", netProfitBeforeTax, netProfitBeforeTaxYTD),
@@ -859,28 +863,95 @@ def process_far_file(file_content):
                             ("", "", ""),
                             ("Net profit", netProfit, netProfitYTD),
                             ("", "", ""),
-                            ("Tax rate up to 50K profit", taxRateUpTo50K, taxRateUpTo50K),
-                            ("Tax rate above 50K profit", taxRateAbove50K, taxRateAbove50K),
+                            ("Corporation Tax rate", taxRateUpTo50K, taxRateUpTo50K),
                             ("", "", ""),
                             ("CT charge", ctChargeMonthly, ctChargeYTD),
                             ("", "", ""),
                             ("Total CT", ctChargeMonthly, ctChargeYTD)
                         ]
                         
-                        # Fill tax calculation table
+                        # Fill tax calculation table (columns I-K)
                         for i, (label, monthly, ytd) in enumerate(tax_data):
                             row_num = 15 + i
-                            processor.ws.cell(row=row_num, column=7).value = label
-                            processor.ws.cell(row=row_num, column=8).value = monthly
-                            processor.ws.cell(row=row_num, column=9).value = ytd
+                            processor.ws.cell(row=row_num, column=9).value = label  # Column I
+                            processor.ws.cell(row=row_num, column=10).value = monthly  # Column J
+                            processor.ws.cell(row=row_num, column=11).value = ytd  # Column K
                             
                             # Bold the header row
                             if i == 0:
-                                for col in range(7, 10):
+                                for col in range(9, 12):  # Columns I-K
                                     processor.ws.cell(row=row_num, column=col).font = openpyxl.styles.Font(bold=True)
+                            
+                            # Apply accounting format to numeric values
+                            if isinstance(monthly, (int, float)) and monthly != 0:
+                                processor.ws.cell(row=row_num, column=10).number_format = "#,##0.00_);(#,##0.00);-_);_(@_)"
+                            if isinstance(ytd, (int, float)) and ytd != 0:
+                                processor.ws.cell(row=row_num, column=11).number_format = "#,##0.00_);(#,##0.00);-_);_(@_)"
                     
-                    # Apply summary table formatting
-                    format_summary_table(processor.ws, start_row=15)
+                    # Apply summary table formatting (for columns A-E only)
+                    # Custom formatting to avoid interfering with tax table in columns G-I
+                    from openpyxl.styles import Font, Alignment, Border, Side
+                    
+                    start_row = 15
+                    max_row = processor.ws.max_row
+                    last_row = start_row
+                    last_col = 5  # Only format columns A-E (1-5)
+                    
+                    # Find the actual last row with data in columns A-E
+                    for r in range(start_row, max_row + 1):
+                        row_has_data = False
+                        for c in range(1, 6):  # Columns A-E
+                            val = processor.ws.cell(row=r, column=c).value
+                            if val is not None and str(val).strip() != "":
+                                row_has_data = True
+                        if row_has_data:
+                            last_row = r
+                    
+                    # Apply formatting only to columns A-E
+                    if last_row >= start_row:
+                        font = Font(name="Gill Sans MT", size=12)
+                        bold_font = Font(name="Gill Sans MT", size=12, bold=True)
+                        border = Border(
+                            left=Side(style='thin'),
+                            right=Side(style='thin'),
+                            top=Side(style='thin'),
+                            bottom=Side(style='thin')
+                        )
+                        
+                        for r in range(start_row, last_row + 1):
+                            for c in range(1, last_col + 1):  # Only columns A-E
+                                cell = processor.ws.cell(row=r, column=c)
+                                val = cell.value
+                                if r == start_row:
+                                    cell.font = bold_font
+                                    cell.alignment = Alignment(horizontal="center", vertical="bottom")
+                                else:
+                                    cell.font = font
+                                    if isinstance(val, (int, float)):
+                                        cell.alignment = Alignment(horizontal="right", vertical="bottom")
+                                        if val is not None:
+                                            if val < 0:
+                                                cell.number_format = "#,##0;(#,##0)"
+                                            elif val == 0:
+                                                cell.number_format = "#,##0;-#,##0;-"
+                                            else:
+                                                cell.number_format = "#,##0"
+                                    else:
+                                        cell.alignment = Alignment(horizontal="left", vertical="bottom")
+                                cell.border = border
+                        
+                        # Auto-adjust column widths for columns A-E only
+                        for c in range(1, last_col + 1):
+                            maxlen = 0
+                            for r in range(start_row, last_row + 1):
+                                v = processor.ws.cell(row=r, column=c).value
+                                vstr = str(v) if v is not None else ""
+                                if len(vstr) > maxlen:
+                                    maxlen = len(vstr)
+                            processor.ws.column_dimensions[openpyxl.utils.get_column_letter(c)].width = max(10, min(maxlen + 2, 40))
+                    
+                    # Apply tax component formatting (for columns I-K)
+                    apply_tax_component_formatting(processor.ws)
                 # --- Format6 ---
                 elif fmt == 'format6':
                     processor = FormatProcessorBase(target_sheet, wb["Account Transactions"])
@@ -1794,7 +1865,7 @@ def process_far_file(file_content):
 
 
     # Apply formatting and adjust column widths after each FormatN routine
-    from openpyxl.styles import PatternFill
+    from openpyxl.styles import PatternFill, Font
     excludeSheets = ["Account Transactions", "P&L", "Corporation Tax", "Mappings", "FAR"]
     for ws in wb.worksheets:
         if ws.title not in excludeSheets:
@@ -1858,6 +1929,13 @@ def process_far_file(file_content):
                         if val is not None and len(str(val)) > max_length:
                             max_length = len(str(val))
                     ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = max_length + 2
+                
+                # --- Make the last row bold ---
+                if lastRow is not None and lastCol is not None:
+                    bold_font = Font(name="Gill Sans MT", size=12, bold=True)
+                    for col_idx in range(1, lastCol + 1):
+                        cell = ws.cell(row=lastRow, column=col_idx)
+                        cell.font = bold_font
             else:
                 ws.cell(row=8, column=3).value = "No data found"
 
