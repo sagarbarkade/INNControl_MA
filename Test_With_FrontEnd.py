@@ -339,9 +339,14 @@ def process_far_file(file_content):
                     wsNew["A7"].value = None
                     wsNew["B7"].value = None
                     wsNew["C7"].value = None
-                    wsNew["A8"] = period_end_date.strftime('%d/%m/%Y')
+                    wsNew["A8"] = period_end_date.strftime('%d-%m-%Y')
+                    wsNew["A8"].number_format = "dd-mm-yyyy"
                     wsNew["B8"] = accountName
                     wsNew["C8"] = None
+                    # Apply font formatting to row 8
+                    for c in range(1, 4):
+                        cell = wsNew.cell(row=8, column=c)
+                        cell.font = openpyxl.styles.Font(name="Gill Sans MT", size=12)
                     wsNew["A9"].value = None
                     wsNew["B9"].value = None
                     wsNew["C9"].value = None
@@ -514,6 +519,9 @@ def process_far_file(file_content):
                         processor.ws.cell(row=current_row, column=4).value = processor.wsTrans.cell(row=transactionRow, column=7).value
                         processor.ws.cell(row=current_row, column=5).value = processor.wsTrans.cell(row=transactionRow, column=8).value
                         processor.ws.cell(row=current_row, column=6).value = processor.wsTrans.cell(row=transactionRow, column=9).value
+                        
+                        # Apply dd-mm-yyyy date format to the date column (column 1)
+                        processor.ws.cell(row=current_row, column=1).number_format = "dd-mm-yyyy"
                         
                         # Update sums for closing balance calculation
                         h_val_raw = processor.wsTrans.cell(row=transactionRow, column=8).value
@@ -1143,11 +1151,13 @@ def process_far_file(file_content):
                     
                     # Fill in summary data
                     processor.ws.cell(row=summaryStartRow, column=1).value = periodEndDate
+                    processor.ws.cell(row=summaryStartRow, column=1).number_format = "dd-mm-yyyy"
                     processor.ws.cell(row=summaryStartRow, column=2).value = "Balance as per statement"
                     processor.ws.cell(row=summaryStartRow, column=3).value = ""
                     summaryStartRow += 2  # Skip blank row
                     
                     processor.ws.cell(row=summaryStartRow, column=1).value = periodEndDate
+                    processor.ws.cell(row=summaryStartRow, column=1).number_format = "dd-mm-yyyy"
                     processor.ws.cell(row=summaryStartRow, column=2).value = "Balance per Control account"
                     processor.ws.cell(row=summaryStartRow, column=3).value = closingBalance
                     processor.ws.cell(row=summaryStartRow, column=3).number_format = "#,##0.00"
@@ -1197,14 +1207,17 @@ def process_far_file(file_content):
                     
                     # Fill in reconciliation data
                     processor.ws.cell(row=summaryStartRow, column=1).value = periodEndDate
+                    processor.ws.cell(row=summaryStartRow, column=1).number_format = "dd-mm-yyyy"
                     processor.ws.cell(row=summaryStartRow, column=2).value = ""  # Manual input placeholder
                     processor.ws.cell(row=summaryStartRow, column=3).value = "Balance as per "
                     
                     processor.ws.cell(row=summaryStartRow + 1, column=1).value = periodEndDate
+                    processor.ws.cell(row=summaryStartRow + 1, column=1).number_format = "dd-mm-yyyy"
                     processor.ws.cell(row=summaryStartRow + 1, column=2).value = closingBalance
                     processor.ws.cell(row=summaryStartRow + 1, column=3).value = "Balance as per "
                     
                     processor.ws.cell(row=summaryStartRow + 2, column=1).value = periodEndDate
+                    processor.ws.cell(row=summaryStartRow + 2, column=1).number_format = "dd-mm-yyyy"
                     processor.ws.cell(row=summaryStartRow + 2, column=2).value = f"=B{summaryStartRow}-B{summaryStartRow + 1}"
                     processor.ws.cell(row=summaryStartRow + 2, column=3).value = "Difference"
                     
@@ -1322,11 +1335,8 @@ def process_far_file(file_content):
         updated_tables = []
         for table_name, table_df in tables:
             updated_table = table_df.copy()
-            if 'Details' in updated_table.columns:
-                updated_table = updated_table[~updated_table['Details'].astype(str).str.strip().str.lower().isin(['opening balance','closing balance'])]
-            else:
-                if updated_table.shape[1] > 1:
-                    updated_table = updated_table[~updated_table.iloc[:,1].astype(str).str.strip().str.lower().isin(['opening balance','closing balance'])]
+            # Note: Do NOT filter out 'opening balance' entries from FAR tables
+            # as these are legitimate asset records, unlike Account Transactions
             if 'Total Depreciation' not in updated_table.columns:
                 updated_table['Total Depreciation'] = 0
             if 'WDV' not in updated_table.columns:
@@ -1630,7 +1640,7 @@ def process_far_file(file_content):
                             cell.alignment = date_align
                             if pd.notnull(val):
                                 try:
-                                    cell.number_format = 'mm-dd-yyyy'
+                                    cell.number_format = 'dd-mm-yyyy'
                                 except Exception:
                                     pass
                         elif 'rate' in col_lc:
@@ -1702,7 +1712,7 @@ def process_far_file(file_content):
                     cell.font = bold_font
                     if c == 0:
                         try:
-                            cell.number_format = 'mm-dd-yyyy'
+                            cell.number_format = 'dd-mm-yyyy'
                         except Exception:
                             pass
                     elif c > 0:
