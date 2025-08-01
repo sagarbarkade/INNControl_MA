@@ -262,13 +262,19 @@ def process_far_file(file_content):
                     try:
                         month = match2.group(1)
                         year = int('20' + match2.group(2))
-                        period_end_date = datetime.strptime(f'{month} {year}', '%b %Y')
+                        # Create date and move to end of month
+                        temp_date = datetime.strptime(f'{month} {year}', '%b %Y')
+                        period_end_date = temp_date.replace(day=1) + pd.offsets.MonthEnd(0)
+                        period_end_date = period_end_date.to_pydatetime()
                     except Exception:
                         pass
                 match3 = re.search(r'([A-Za-z]+)\s+(\d{4})', val)
                 if match3:
                     try:
-                        period_end_date = datetime.strptime(f'{match3.group(1)} {match3.group(2)}', '%B %Y')
+                        # Create date and move to end of month
+                        temp_date = datetime.strptime(f'{match3.group(1)} {match3.group(2)}', '%B %Y')
+                        period_end_date = temp_date.replace(day=1) + pd.offsets.MonthEnd(0)
+                        period_end_date = period_end_date.to_pydatetime()
                     except Exception:
                         pass
 
@@ -467,6 +473,9 @@ def process_far_file(file_content):
                         processor.ws.cell(row=summaryRow, column=3 + idx).value = totalSum
                         totalClosingBalance += totalSum
                     
+                    # Round the final closing balance to avoid floating-point precision issues
+                    totalClosingBalance = round(totalClosingBalance, 2)
+                    
                     # Set final closing balance
                     processor.ws.cell(row=summaryRow, column=3 + len(sortedMonths)).value = totalClosingBalance
                     
@@ -531,8 +540,8 @@ def process_far_file(file_content):
                         
                         current_row += 1
                     
-                    # Calculate closing balance
-                    closingBalance = sumI - sumH
+                    # Calculate closing balance with rounding to avoid floating-point precision errors
+                    closingBalance = round(sumI - sumH, 2)
                     
                     # Add Closing Balance row
                     closingBalanceRow = current_row + 1
@@ -546,14 +555,14 @@ def process_far_file(file_content):
                     for col in range(1, 7):
                         processor.ws.cell(row=closingBalanceRow, column=col).font = openpyxl.styles.Font(bold=True)
                     
-                    # Update cell C8 with absolute value of closing balance
-                    processor.ws.cell(row=8, column=3).value = abs(closingBalance)
+                    # Update cell C8 with absolute value of closing balance (rounded)
+                    processor.ws.cell(row=8, column=3).value = round(abs(closingBalance), 2)
                     
                     # Add Total row
                     totalRow = closingBalanceRow + 1
                     processor.ws.cell(row=totalRow, column=1).value = "Total"
-                    processor.ws.cell(row=totalRow, column=5).value = sumH + (closingBalance if closingBalance > 0 else 0)
-                    processor.ws.cell(row=totalRow, column=6).value = sumI - (closingBalance if closingBalance < 0 else 0)
+                    processor.ws.cell(row=totalRow, column=5).value = round(sumH + (closingBalance if closingBalance > 0 else 0), 2)
+                    processor.ws.cell(row=totalRow, column=6).value = round(sumI - (closingBalance if closingBalance < 0 else 0), 2)
                     
                     # Bold the Total row
                     for col in range(1, 7):
@@ -593,6 +602,9 @@ def process_far_file(file_content):
                         val_i = safe_float(val_i_raw, f"format3 val_i row {transactionRow}")
                         val_h = safe_float(val_h_raw, f"format3 val_h row {transactionRow}")
                         closingBalance += val_i - val_h
+                    
+                    # Round the final closing balance to avoid floating-point precision issues
+                    closingBalance = round(closingBalance, 2)
                     
                     # Setup summary table headers
                     headers = ["Date", "Particular", "£"]
@@ -1145,6 +1157,9 @@ def process_far_file(file_content):
                         debitVal = safe_float(debitVal_raw, f"format9 debitVal row {transactionRow}")
                         closingBalance = closingBalance + (creditVal - debitVal)
                     
+                    # Round the final closing balance to avoid floating-point precision issues
+                    closingBalance = round(closingBalance, 2)
+                    
                     # Setup summary table
                     headers = ["Date", "Details", "Amount £"]
                     summaryStartRow = processor.setup_summary_headers(headers, 15)
@@ -1196,6 +1211,9 @@ def process_far_file(file_content):
                         debitVal = safe_float(debitVal_raw, f"format10 debitVal row {transactionRow}")
                         creditVal = safe_float(creditVal_raw, f"format10 creditVal row {transactionRow}")
                         closingBalance = closingBalance + (debitVal - creditVal)
+                    
+                    # Round the final closing balance to avoid floating-point precision issues
+                    closingBalance = round(closingBalance, 2)
                     
                     # Setup reconciliation header
                     processor.ws.cell(row=13, column=1).value = "Reconciliation"
